@@ -1,0 +1,36 @@
+{
+ "version": "2026.11.5.2205",
+ "file": "bayshore-game.html",
+ "sha256": "aa82c6b57fe3206c92c10fdfbac526d94d1c216fe748b3e63c4de0a9ea48dfc3",
+ "assets": [
+  {
+   "path": "sounds/crownvic.wav",
+   "sha256": "5f7a357c9b075dd221ca8d7144505826d1a1ae3b1fe1313ca6fd95d0b5f6b8de"
+  },
+  {
+   "path": "sounds/crownvicdual.wav",
+   "sha256": "fc0abbd3531c4b8ab2d08d1e12572feb3f4a11123deae9aac5ac17aab7d413c6"
+  },
+  {
+   "path": "sounds/index.json",
+   "sha256": "ed75a52f6cf1a8cbd0d40f7298e93eeaef9779d8d8fe7b8d07595352062467a6"
+  },
+  {
+   "path": "sounds/pentastar.wav",
+   "sha256": "01ea11dc1a91be6322e0d9b2ef4b8cac6c43a06d4f7f8bbfcdcce530b176251a"
+  }
+ ],
+ "launcher": {
+  "version": "1.3.0",
+  "files": [
+   {
+    "path": "launcher/app.js",
+    "sha256": "0b825360cb406b90a3333374c68cf4ba8e236b5af3110a86dae28763726cc30f"
+   },
+   {
+    "path": "launcher/preload.js",
+    "sha256": "b5fe73d81e4f4fbb631a57a8f738d95aefb31404415d13b2e07e34c91a41fdf7"
+   }
+  ]
+ }
+}
