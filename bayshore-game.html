@@ -10729,12 +10729,12 @@ function trBuildCivTemplate(key,pol){
    footprints and their heights against the line of sight) isn't drawn. Each car is tested every few frames (a ray
    walked through the building grid in 5 m steps); it's shown again as soon as a test finds a clear line. */
 const OCC={i:0,on:true,_c:null};
-function trOccH(x,yTop,z){const C=TRCAM.position,cx=C.x,cy=C.y,cz=C.z,dx=x-cx,dz=z-cz,d=Math.hypot(dx,dz);if(d<30)return false;const n=Math.floor(d/5);
+function trOccH(x,yTop,z){if(window.BAY_OCC)return window.BAY_OCC(x,yTop,z,2.6);const C=TRCAM.position,cx=C.x,cy=C.y,cz=C.z,dx=x-cx,dz=z-cz,d=Math.hypot(dx,dz);if(d<30)return false;const n=Math.floor(d/5);
   for(let i=1;i<n;i++){const t=i/n,px=cx+dx*t,pz=cz+dz*t,ly=cy+(yTop-cy)*t;
     for(const b of RN.bld.near(px,pz)){if(!(b.h>ly))continue;const c=Math.cos(b.rot||0),s=Math.sin(b.rot||0),lx=(px-b.x)*c-(pz-b.z)*s,lz=(px-b.x)*s+(pz-b.z)*c;
       if(Math.abs(lx)<b.w/2-0.5&&Math.abs(lz)<b.d/2-0.5)return true;}}return false;}
 function trOccStep(cars){if(!OCC.on||window.PHOTO_ON||!cars.length)return;const n=cars.length,per=Math.max(4,Math.ceil(n/5));
-  for(let k=0;k<per&&k<n;k++){const a=cars[(OCC.i+k)%n];if(!a.alive||!a.root)continue;a.occl=trOccH(a.x,(a.y||0)+2.2,a.z);}
+  for(let k=0;k<per&&k<n;k++){const a=cars[(OCC.i+k)%n];if(!a.alive||!a.root)continue;if(trOccH(a.x,(a.y||0)+2.2,a.z)){a.occN=(a.occN||0)+1;a.occl=a.occN>=2;}else{a.occN=0;a.occl=false;}}
   OCC.i=(OCC.i+per)%n;}
 
 /* ======================= ported from Back Roads (traffic.js), with the Bayshore patches from mkport.py ======================= */
@@ -19190,7 +19190,8 @@ const CHANGELOG=[
     'Palms of every kind (tall royals, leaning coconuts, round cabbage palms, dead-frond skirts), leafy trees, shrubs and hedges, palms along city sidewalks',
     'Buildings each with their own cornices, bands, fins and rooftops; windows with rooms behind them',
     'Night: orange sodium street lights visible from across the city, coloured floodlights and crowns on the towers',
-    'Gun shop counter fixed; cars hidden behind buildings no longer drawn (faster)']}];
+    'Gun shop counter fixed; carjacking fixed',
+    'Faster: cars, police, trees and lamp light pools hidden behind buildings (from where the camera is) aren\'t drawn; street-lamp glows visible at any distance']}];
 function updCard(head,sub,list,buttons){const old=document.getElementById('updCard');if(old)old.remove();
   const d=document.createElement('div');d.id='updCard';
   d.style.cssText='position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(8,4,18,.55);backdrop-filter:blur(3px);font-family:Barlow,system-ui,sans-serif';
@@ -19478,7 +19479,7 @@ function beamsStep(dt){if(!BEAM.mat)return;const T=todNow,on=!!CFG.gfx.beams&&T&
     const Q=v.lamps&&v.lamps.Q;v._beams[0].visible=!(Q&&Q.FL&&Q.FL.broken);v._beams[1].visible=!(Q&&Q.FR&&Q.FR.broken);}
   // street lamps: the nearest 80 (refreshed twice a second)
   BEAM.t-=dt;if(BEAM.lamps&&BEAM.t<=0&&typeof LAMPS!=='undefined'){BEAM.t=0.5;BEAM.lamps.visible=true;const ord=lampOrder();
-    const M=new THREE.Matrix4(),C=new THREE.Color();let n=0;for(const [d2,l] of ord){if(n>=80||d2>240*240)break;const gy=groundAt(l.x,l.z,l.y-0.5).y,h=Math.max(2,l.y-0.3-gy);M.makeScale(h*0.62,h,h*0.62).setPosition(l.x,l.y-0.3,l.z);BEAM.lamps.setMatrixAt(n,M);C.setHex(lampCol(l.x,l.z));BEAM.lamps.setColorAt(n,C);n++;}
+    const M=new THREE.Matrix4(),C=new THREE.Color();let n=0;for(const [d2,l] of ord){if(n>=80||d2>240*240)break;if(!PHOTO.on&&occTest(l.x,l.y,l.z))continue;const gy=groundAt(l.x,l.z,l.y-0.5).y,h=Math.max(2,l.y-0.3-gy);M.makeScale(h*0.62,h,h*0.62).setPosition(l.x,l.y-0.3,l.z);BEAM.lamps.setMatrixAt(n,M);C.setHex(lampCol(l.x,l.z));BEAM.lamps.setColorAt(n,C);n++;}
     BEAM.lamps.count=n;BEAM.lamps.instanceMatrix.needsUpdate=true;if(BEAM.lamps.instanceColor)BEAM.lamps.instanceColor.needsUpdate=true;}}
 
 /* ---------------------------------------------------------------------------
@@ -19546,7 +19547,7 @@ function lampsTerm(){const W=window.BAY_LAMPW,C=window.BAY_LAMPC;if(!W)return;co
   if(!k){for(let i=0;i<NL;i++)if(W[i].w)W[i].w=0;return;}
   const ord=lampOrder(),nl=LT.lamps.length;
   for(let i=0;i<NL;i++){const e=ord[i];if(!e||i<nl){W[i].w=0;continue;}const l=e[1];W[i].set(l.x,l.y,l.z,3*k*clamp(1.6-Math.sqrt(e[0])/150,0,1));_lcol.setHex(lampCol(l.x,l.z));C[i].set(_lcol.r,_lcol.g,_lcol.b);}}
-function gfxFrame(dt,t){try{lampsTerm();}catch(e){console.warn('lamps term',e);}try{npcLodStep(dt||0.016);}catch(e){}try{blobsStep();}catch(e){console.warn('blobs',e);}try{lightsFrame();}catch(e){console.warn('lights',e);}try{shadowRates();}catch(e){console.warn('shrates',e);}try{beamsStep(dt);}catch(e){console.warn('beams',e);}
+function gfxFrame(dt,t){occStep();try{lampsTerm();}catch(e){console.warn('lamps term',e);}try{npcLodStep(dt||0.016);}catch(e){}try{blobsStep();}catch(e){console.warn('blobs',e);}try{lightsFrame();}catch(e){console.warn('lights',e);}try{shadowRates();}catch(e){console.warn('shrates',e);}try{beamsStep(dt);}catch(e){console.warn('beams',e);}
   try{windowsStep(t);}catch(e){}try{reflStep();}catch(e){console.warn('refl',e);}
   try{lpoolStep(dt);lglowStep();}catch(e){console.warn('lamps',e);}try{wreflStep();}catch(e){console.warn('water',e);}}
 // the shadows: cars cast them (not their glass); the shop's merged pieces too
@@ -19589,7 +19590,7 @@ function lpoolStep(dt){const T=todNow,night=!!(T&&T.lamps>0);
   LPOOL.mesh.visible=night;if(!night)return;LPOOL.mesh.material.uniforms.uI.value=0.3*T.lamps;
   LPOOL.t-=dt;if(LPOOL.t>0)return;LPOOL.t=0.25;
   const ord=lampOrder(),skip=48,max=PHOTO.on?220:150,M=new THREE.Matrix4(),C=new THREE.Color();let n=0;
-  for(let i=skip;i<ord.length&&n<max;i++){const l=ord[i][1];if(ord[i][0]>(PHOTO.on?900:520)**2)break;
+  for(let i=skip;i<ord.length&&n<max;i++){const l=ord[i][1];if(ord[i][0]>(PHOTO.on?900:520)**2)break;if(!PHOTO.on&&occTest(l.x,l.y,l.z))continue;
     if(l._gy==null)l._gy=groundAt(l.x,l.z,l.y-0.5).y;const h=Math.max(3,l.y-l._gy),R=h*2.2;M.makeScale(R*2,1,R*2).setPosition(l.x,l._gy+0.06,l.z);
     LPOOL.mesh.setMatrixAt(n,M);C.setHex(lampCol(l.x,l.z));LPOOL.mesh.setColorAt(n,C);n++;}
   LPOOL.mesh.count=n;LPOOL.mesh.instanceMatrix.needsUpdate=true;if(LPOOL.mesh.instanceColor)LPOOL.mesh.instanceColor.needsUpdate=true;}
@@ -19602,7 +19603,7 @@ function lglowStep(){const T=todNow,night=!!(T&&T.lamps>0);if(typeof LAMPS==='un
     const m=new THREE.ShaderMaterial({uniforms:{uI:{value:1},uPx:{value:600}},transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,vertexColors:true,
       vertexShader:`uniform float uPx; uniform float uI; varying vec3 vC; varying float vA;
         void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); float d = -mv.z; float px = uPx * 1.6 / max(d, 1.0);
-          gl_PointSize = clamp(px, 3.2, 48.0); vA = uI * smoothstep(25.0, 90.0, d) * (px < 3.2 ? 1.25 : 1.0); vC = color; gl_Position = projectionMatrix * mv; }`,
+          gl_PointSize = clamp(px, 3.2, 48.0); vA = uI * smoothstep(25.0, 90.0, d) * (px < 3.2 ? 1.25 : 1.0); vC = color; gl_Position = projectionMatrix * mv; gl_Position.z = min(gl_Position.z, gl_Position.w * 0.99999); }`,
       fragmentShader:`varying vec3 vC; varying float vA; void main(){ vec2 q = gl_PointCoord*2.0-1.0; float r2 = dot(q,q); if (r2 > 1.0) discard;
           float k = exp(-r2*5.0)*0.85 + exp(-r2*30.0)*1.6; gl_FragColor = vec4(vC * vA * k, 1.0); }`});
     LGLOW.pts=new THREE.Points(g,m);LGLOW.pts.frustumCulled=false;LGLOW.pts.renderOrder=6;LGLOW.pts.userData.fx=true;LGLOW.n=N;scene.add(LGLOW.pts);}
@@ -19678,6 +19679,44 @@ function npcLodStep(dt){NLOD.scanT-=dt;if(NLOD.scanT<=0){NLOD.scanT=2;try{npcLod
     for(let i=0;i<R.all.length;i++){const m=R.all[i];if(st===2)m.castShadow=false;else if(R.st===2||R.st===-1)m.castShadow=R.cast[i];}
     R.st=st;}
   NLOD.i=(NLOD.i+per)%n;}
+
+/* ---------------------------------------------------------------------------
+   Occlusion: a height map of the buildings (4 m cells, the tallest roof over each), so "can the camera see the top
+   of this?" is a walk of a few dozen array reads. Used to stop drawing trees, street-lamp pools and light beams,
+   and traffic and police cars, that are behind buildings. Lamps' glows themselves are tested by the depth buffer and
+   are never clipped by distance (you see a city's lights from across the bay).
+--------------------------------------------------------------------------- */
+const OCCH={hf:null,x0:0,z0:0,nx:0,nz:0,c:4,trees:null,ti:0,mi:0,on:true};
+function occBuild(){if(OCCH.hf||typeof WD==='undefined'||!WD.buildings)return;let x0=1e9,z0=1e9,x1=-1e9,z1=-1e9;
+  WD.buildings.forEach(b=>b.t[0].poly.forEach(p=>{x0=Math.min(x0,p[0]);x1=Math.max(x1,p[0]);z0=Math.min(z0,p[1]);z1=Math.max(z1,p[1]);}));
+  const c=OCCH.c,nx=Math.ceil((x1-x0)/c)+2,nz=Math.ceil((z1-z0)/c)+2;if(nx*nz>12e6)return;const hf=new Float32Array(nx*nz);
+  WD.buildings.forEach(b=>{const P=b.t[0].poly,h=Math.max(...b.t.map(t=>t.y1||0));if(h<4)return;const bb=bbox(P);
+    for(let i=Math.floor((bb[0]-x0)/c);i<=Math.ceil((bb[2]-x0)/c);i++)for(let j=Math.floor((bb[1]-z0)/c);j<=Math.ceil((bb[3]-z0)/c);j++){const x=x0+(i+0.5)*c,z=z0+(j+0.5)*c;
+      const pip=(x,z)=>{let ins=false;for(let a=0,q=P.length-1;a<P.length;q=a++){if((P[a][1]>z)!==(P[q][1]>z)&&x<(P[q][0]-P[a][0])*(z-P[a][1])/(P[q][1]-P[a][1])+P[a][0])ins=!ins;}return ins;};
+      // only cells wholly inside the building block the view (a line of sight that grazes a corner stays clear)
+      if(pip(x-c/2,z-c/2)&&pip(x+c/2,z-c/2)&&pip(x-c/2,z+c/2)&&pip(x+c/2,z+c/2)){const k=j*nx+i;if(h>hf[k])hf[k]=h;}}});
+  Object.assign(OCCH,{hf,x0,z0,nx,nz});window.BAY_OCC=occTest;}
+// true when buildings hide the point (x, y, z) from the CAMERA (where the view is from, not where the player stands);
+// with r, the object's width: hidden only if its middle and both sides (across the line of sight) are
+function occRay(x,y,z){const H=OCCH.hf,C=camera.position,dx=x-C.x,dz=z-C.z,d=Math.hypot(dx,dz);if(d<50)return false;
+  const c=OCCH.c,s0=6,s1=d-6,n=Math.max(1,Math.floor((s1-s0)/2.5));
+  for(let i=0;i<=n;i++){const s=s0+(s1-s0)*i/n,t=s/d,px=C.x+dx*t,pz=C.z+dz*t,gi=Math.floor((px-OCCH.x0)/c),gj=Math.floor((pz-OCCH.z0)/c);
+    if(gi<0||gj<0||gi>=OCCH.nx||gj>=OCCH.nz)continue;const h=H[gj*OCCH.nx+gi];if(h>0&&h>C.y+(y-C.y)*t+0.5)return true;}return false;}
+function occTest(x,y,z,r){if(!OCCH.hf)return false;if(!occRay(x,y,z))return false;if(!r)return true;
+  const C=camera.position,dx=x-C.x,dz=z-C.z,d=Math.hypot(dx,dz)||1,px=-dz/d*r,pz=dx/d*r;return occRay(x+px,y,z+pz)&&occRay(x-px,y,z-pz);}
+// trees: each instanced chunk keeps its full list; the ones hidden behind buildings are left out of what's drawn
+function occTrees(){if(typeof TREES==='undefined')return;if(!OCCH.trees){OCCH.trees=TREES.children.filter(m=>m.isInstancedMesh&&!m.userData.treeLo).map(m=>{const A=m.instanceMatrix.array,n=m.count;
+    return {m,lo:m.userData.lo||null,A0:Float32Array.from(A.subarray(0,n*16)),n,o:new Uint8Array(n),dirty:false};});}
+  const L=OCCH.trees;if(!L.length)return;let budget=PHOTO.on?0:900;
+  if(PHOTO.on){L.forEach(T=>{if(T.o.some(v=>v)){T.o.fill(0);T.dirty=true;}});}
+  while(budget>0){const T=L[OCCH.mi%L.length];const vis=T.m.visible||(T.lo&&T.lo.visible);
+    if(!vis){OCCH.mi++;OCCH.ti=0;budget-=4;continue;}
+    for(;OCCH.ti<T.n&&budget>0;OCCH.ti++,budget-=3){const i=OCCH.ti,k=i*16,x=T.A0[k+12],y=T.A0[k+13]+T.A0[k+5]*1.6+3,z=T.A0[k+14],r=Math.hypot(T.A0[k],T.A0[k+2])*2+1;
+      const was=T.o[i],b=occTest(x,y,z,r),nw=b?Math.min(2,(was&3)+1):0;if((nw>=2)!==(was>=2))T.dirty=true;T.o[i]=nw;}
+    if(OCCH.ti>=T.n){OCCH.ti=0;OCCH.mi++;}if(OCCH.mi>=L.length*2)OCCH.mi=0;}
+  for(const T of L){if(!T.dirty)continue;T.dirty=false;const A=T.m.instanceMatrix.array;let c=0;for(let i=0;i<T.n;i++){if(T.o[i]>=2)continue;A.set(T.A0.subarray(i*16,i*16+16),c*16);c++;}
+    T.m.count=c;if(T.lo)T.lo.count=c;T.m.instanceMatrix.needsUpdate=true;}}
+function occStep(){if(!OCCH.on)return;try{occBuild();occTrees();}catch(e){console.warn('occ',e);OCCH.on=false;}}
 
 /* ---------------------------------------------------------------------------
    The Bayshore PD station on Coconut Street (its building is in the map: station_pre.js). Here: the sign, the glass
