@@ -11437,7 +11437,7 @@ function trAudioStop(){TR_V.forEach(e=>{try{e.v.stop();}catch(x){}});TR_V.length
 function trAudio(){
   if(!AC||muted||AC.state!=='running'){if(TR_V.length)trAudioStop();return;}
   const cx=TRCAM.position.x,cz=TRCAM.position.z;
-  const near=TRAFFIC.cars.filter(a=>a.alive&&!a.parked&&!a.acc&&a.alpha>0.5).map(a=>[Math.hypot(a.x-cx,a.z-cz),a]).filter(q=>q[0]<85)
+  const near=TRAFFIC.cars.concat(window.BAY_NETAUD||[]).filter(a=>a.alive&&!a.parked&&!a.acc&&a.alpha>0.5).map(a=>[Math.hypot(a.x-cx,a.z-cz),a]).filter(q=>q[0]<85)
     .sort((p,q)=>p[0]-q[0]).slice(0,4).map(q=>q[1]);
   for(let i=TR_V.length-1;i>=0;i--){const e=TR_V[i];if(near.indexOf(e.a)<0){try{e.v.stop();}catch(x){}TR_V.splice(i,1);}}
   near.forEach(a=>{if(TR_V.some(e=>e.a===a))return;const c=a.spec;
@@ -11685,7 +11685,7 @@ window.BAYTR={
       const u={id:a.unitText,a,st:'patrol',bay:null,home:S,mode:'patrol',departAt:0,shiftEnd:BPD.t+90,restUntil:0,parkT:-1e9,brainT:0,retire:false,legs:0,crew:[cops[(n*2)%cops.length],cops[(n*2+1)%cops.length]],adopted:true};
       a.unit=u;a.mode='patrol';BPD.units.push(u);try{polCrew(u,true);}catch(e){}try{polPatrolDest(u);}catch(e){}return u;},
     // online: hand one of mine over (it isn't on a call): gone from here, a new car will be fitted out at the station later
-    give(id){const u=BPD.units.find(q=>q.a.id===id);if(!u||u.a.pd||!u.a.alive||u.st==='parked')return false;polRemoveUnit(u);BPD.rosterT=0;return true;},
+    give(id,force){const u=BPD.units.find(q=>q.a.id===id);if(!u||!u.a.alive||u.st==='parked'||(u.a.pd&&!force))return false;if(u.a.pd&&window.TRPD_RELEASE)try{window.TRPD_RELEASE(u);}catch(e){}polRemoveUnit(u);BPD.rosterT=0;return true;},
     seen:(x,z,r)=>trSeen(x,z,r),
     lanes:(ri,T)=>trLanes(MAP.roads[ri],T)},
   seen:(x,z,r)=>trSeen(x,z,r),
@@ -14979,7 +14979,7 @@ function carToEnter(){const P=ME.it.pl;let best=null;
     const jack=!a.parked;if(jack&&(!a.driver||Math.hypot(a.sim==='kin'?(a.vk||0):(a.u||0),a.sim==='kin'?0:(a.v||0))>0.9))continue;
     const b=carBoxD(a,a.halfLen,a.halfWid,P.x,P.z);if(b.d<1.4&&Math.abs(P.y-(a.y||0))<1.2&&(!best||b.d<best.d))best={a,jack,d:b.d,side:b.side};}
   return best;}
-function enterCar(){const it=ME.it,P=it.pl;if(ME.seq)return;const c=carToEnter();if(!c)return;
+function enterCar(){const it=ME.it,P=it.pl;if(ME.seq)return;if(NET.on)try{nwAdoptAt(P.x,P.z);}catch(e){}const c=carToEnter();if(!c)return;
   let v=c.v,jk=null;if(c.a&&c.cop){v=wStealCruiser(c.a,c.cop);if(!v)return;if(c.cop.jack)jk={v,thrown:null};}
   else if(c.a){const nwA=c.a.remote?c.a:null;if(c.jack){jk=fromTraffic(c.a,c.side);if(!jk)return;v=jk.v;}else{v=fromParked(c.a);if(!v)return;}if(nwA)try{nwTookPuppet(nwA);}catch(e){}}
   if(c.a&&!c.cop){try{crime(c.jack?'carjack':'steal',v.ph.x,v.ph.z,{veh:v});}catch(e){console.warn('wanted',e);}}
@@ -17840,13 +17840,15 @@ function robStep(dt){if(!ROB.on)return false;const it=ME.it,P=it.pl,a=ROB.a;
   robUI(true);
   if(ROB.t>=ROB.T){robDone(a);return false;}
   P.x=a.x+a.nx*0.82;P.z=a.z+a.nz*0.82;it.node.position.set(P.x,P.y,P.z);return true;}
-function robDone(a){ROB.on=false;robUI(false);a.broken=true;a.brokenT=ME.t;
-  // the safe door hangs open
+function robDone(a){ROB.on=false;robUI(false);atmBreak(a);
+  SAVE.cash+=1000;saveGame();moneyShow(1000);sndCash();toast('+$1,000');
+  if(NET.on)try{nwEvent({k:'atm',i:SHOP.atms.indexOf(a)});}catch(e){}
+  wReport({type:'atmAlarm',lvl:2,x:a.x,z:a.z,desc:false,veh:null,name:'an ATM alarm'});}
+// an ATM broken open (here, or by another player online): the safe door hangs open and the alarm rings
+function atmBreak(a){if(a.broken)return;a.broken=true;a.brokenT=ME.t;
   if(a.g){const d=new THREE.Group(),m=new THREE.Mesh(new THREE.BoxGeometry(0.62,0.66,0.04),shopMat(0x4b535b,{roughness:0.5,metalness:0.6}));m.position.set(0.31,0,0);d.add(m);
     d.position.set(-0.31,0.5,0.43);d.rotation.y=-1.9;a.g.add(d);const hole=new THREE.Mesh(new THREE.PlaneGeometry(0.6,0.62),new THREE.MeshBasicMaterial({color:0x07080a}));hole.position.set(0,0.5,0.425);a.g.add(hole);a.door=[d,hole];}
-  SAVE.cash+=1000;saveGame();moneyShow(1000);sndCash();toast('+$1,000');
-  ATM_ALARMS.push({x:a.x,y:a.y+1.6,z:a.z,t:0,T:40,next:0});
-  wReport({type:'atmAlarm',lvl:2,x:a.x,z:a.z,desc:false,veh:null,name:'an ATM alarm'});}
+  ATM_ALARMS.push({x:a.x,y:a.y+1.6,z:a.z,t:0,T:40,next:0});}
 function robUI(on){let e=g$('grob');if(!e){e=document.createElement('div');e.id='grob';
     e.style.cssText='position:absolute;left:50%;bottom:calc(120px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);width:min(320px,70vw);pointer-events:none;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.8)';
     e.innerHTML='<div style="font:600 12px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:#fff;margin-bottom:6px">Prying open the ATM · move to stop</div><div style="height:8px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35)"><i id="grobBar" style="display:block;height:100%;width:0;background:var(--amber,#ffb02e)"></i></div>';
@@ -18272,39 +18274,70 @@ function netState(){const it=ME.it;if(!it)return null;const P=it.pl,v=DRIVE;cons
   if(NET.ride&&NET.ride.seq){const P2=it.pl;o.x=+P2.x.toFixed(2);o.y=+P2.y.toFixed(2);o.z=+P2.z.toFixed(2);o.h=+P2.psi.toFixed(3);o.g=NET.ride.seq.ph==='walk'?0.9:0;o.sitW={id:NET.ride.id,s:NET.ride.seat};}
   else if(NET.ride){const R=NET.rem.get(NET.ride.id);o.sit={id:NET.ride.id,s:NET.ride.seat};if(R&&R.car){o.x=+R.car.node.position.x.toFixed(2);o.z=+R.car.node.position.z.toFixed(2);o.y=+R.car.node.position.y.toFixed(2);}}
   else if(v){const ph=v.ph,cp=Math.cos(ph.psi),sp=Math.sin(ph.psi);o.c={k:v.key,col:v.color,x:+ph.x.toFixed(2),y:+v.node.position.y.toFixed(2),z:+ph.z.toFixed(2),h:+ph.psi.toFixed(3),
-      r:+(v.node.rotation.x||0).toFixed(3),p:+(v.node.rotation.z||0).toFixed(3),vx:+(ph.u*cp-ph.v*sp).toFixed(2),vz:+(-ph.u*sp-ph.v*cp).toFixed(2),st:+(ph.steer||0).toFixed(2),l:v.lightsOn?1:0};
+      r:+(v.node.rotation.x||0).toFixed(3),p:+(v.node.rotation.z||0).toFixed(3),vx:+(ph.u*cp-ph.v*sp).toFixed(2),vz:+(-ph.u*sp-ph.v*cp).toFixed(2),st:+(ph.steer||0).toFixed(2),l:v.lightsOn?1:0,b:+((ph.brk||0)+(ph.hand?1:0)).toFixed(2),rpm:Math.round(ph.rpm||0),ld:+(ph.load||0).toFixed(2),al:v.alarm?1:0};
     o.x=o.c.x;o.z=o.c.z;o.y=o.c.y;
     // anyone riding with me (I keep their seats for them)
-  }else{o.x=+P.x.toFixed(2);o.y=+P.y.toFixed(2);o.z=+P.z.toFixed(2);o.h=+P.psi.toFixed(3);const g=npcState(it.g).v||0;o.g=+g.toFixed(2);if(ME.dead)o.d=1;if(ME.rag)o.rg=1;}
+  }else{o.x=+P.x.toFixed(2);o.y=+P.y.toFixed(2);o.z=+P.z.toFixed(2);o.h=+P.psi.toFixed(3);const g=npcState(it.g).v||0;o.g=+g.toFixed(2);if(ME.dead)o.d=1;if(ME.rag)o.rg=1;
+    {const w=wpCur();if(w)o.wp=w;else if(MEL.on&&MEL.id)o.wp='m:'+MEL.id;}if(o.wp&&wpAiming()){o.am=1;const d=camera.getWorldDirection(V3());o.ay=+Math.atan2(-d.z,d.x).toFixed(3);o.ap=+Math.asin(clamp(d.y,-1,1)).toFixed(3);}
+    if(ROB.on&&ROB.a)o.rb=SHOP.atms.indexOf(ROB.a);if(WANT.surr&&WANT.surr.on)o.hu=1;}
   if(NW.pkGone.size)o.pk=[...NW.pkGone];{const pc=nwParkedMine();if(pc)o.pc=pc;}
   if(NET.jk)o.jk=NET.jk;if(NET.jkAck)o.ja=NET.jkAck;return o;}
-function netSend(dt){if(!NET.room)return;NET.sendT-=dt;const moving=!!(DRIVE&&Math.hypot(DRIVE.ph.u,DRIVE.ph.v)>0.3)||(ME.it&&(npcState(ME.it.g).v||0)>0.05);
+function netSend(dt){if(!NET.room)return;NET.sendT-=dt;const moving=!!(DRIVE&&Math.hypot(DRIVE.ph.u,DRIVE.ph.v)>0.3)||(ME.it&&(npcState(ME.it.g).v||0)>0.05)||wpAiming()||!!ME.punch||ROB.on||!!ME.seq;
   if(NET.sendT>0)return;NET.sendT=moving||NET.jk||NET.jkAck?0.1:0.5;const s=netState();if(s)NET.room.set(s);}
 /* ---- the others ---- */
 function netRem(id){let R=NET.rem.get(id);if(R)return R;R={id,g:null,node:null,ri:-1,car:null,carKey:'',cops:[],t:0,pos:new THREE.Vector3(),psi:0,seen:0};NET.rem.set(id,R);return R;}
-function netRemDrop(R){if(R.node)scene.remove(R.node);if(R.car){scene.remove(R.car.node);R.car=null;}R.cops.forEach(c=>scene.remove(c.node));R.cops=[];if(R.tag)R.tag.remove();}
+function netRemDrop(R){if(R.node)scene.remove(R.node);if(R.car){try{alarmStop(R.car);}catch(e){}scene.remove(R.car.node);R.car=null;}R.cops.forEach(c=>scene.remove(c.node));R.cops=[];if(R.tag)R.tag.remove();}
 function netRemBody(R,ri){if(R.g&&R.ri===ri)return;if(R.node)scene.remove(R.node);const g=buildNPC(NPCS[ri]||NPCS[0]),node=new THREE.Group();node.add(g);g.traverse(o=>{if(o.isMesh)o.castShadow=true;});scene.add(node);R.g=g;R.node=node;R.ri=ri;}
 function netRemCar(R,c){if(R.car&&R.carKey===c.k+'|'+c.col)return R.car;if(R.car){scene.remove(R.car.node);R.car=null;}
   const v=buildVehicle(c.k,c.col);if(!v)return null;v.remote=R.id;v.alive=true;v.node.visible=true;scene.add(v.node);R.car=v;R.carKey=c.k+'|'+c.col;R.car.cur={x:c.x,y:c.y,z:c.z,h:c.h};return v;}
 function netRemCop(R,i){if(R.cops[i])return R.cops[i];const v=buildVehicle(COP_KEYS[0],'#f3f5f1');if(!v)return null;scene.add(v.node);R.cops[i]=v;v.cur=null;return v;}
 const _nq=new THREE.Vector3();
-function netRemStep(dt){const seen=new Set();
+function netRemStep(dt){const seen=new Set(),aud=[];
   for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number')continue;seen.add(p.id);const R=netRem(p.id);R.pr=pr;netRemBody(R,(pr.ri|0)%Math.max(1,NPCS.length));const g=R.g;
-    // in their own car
+    // in their own car: placed, then posed by the game's own car code (suspension, wheels, steering, lights, brake lights, doors)
     if(pr.c&&typeof pr.c.x==='number'){const v=netRemCar(R,pr.c);if(v){const C=v.cur;const k=Math.min(1,dt*10);C.x+=(pr.c.x+(pr.c.vx||0)*0.1-C.x)*k;C.z+=(pr.c.z+(pr.c.vz||0)*0.1-C.z)*k;C.y+=(pr.c.y-C.y)*k;C.h+=wrapA(pr.c.h-C.h)*k;
-        if(Math.hypot(pr.c.x-C.x,pr.c.z-C.z)>25){C.x=pr.c.x;C.z=pr.c.z;}v.node.position.set(C.x,C.y,C.z);v.node.rotation.set(pr.c.r||0,C.h,pr.c.p||0,'YXZ');if(v.ph){v.ph.x=C.x;v.ph.z=C.z;v.ph.psi=C.h;v.ph.u=Math.hypot(pr.c.vx||0,pr.c.vz||0);v.ph.v=0;}try{stepPanels(v.m,dt);}catch(e){}
-        const sp=Math.hypot(pr.c.vx||0,pr.c.vz||0);(v.m.wheels||[]).forEach((w,i)=>{w.rotation.order='YXZ';w.userData.rs=(w.userData.rs||0)-sp*dt/0.33;w.rotation.z=w.userData.rs;w.rotation.y=i<2?(pr.c.st||0):0;});
+        if(Math.hypot(pr.c.x-C.x,pr.c.z-C.z)>25){C.x=pr.c.x;C.z=pr.c.z;}
+        const ph=v.ph,cp=Math.cos(C.h),sp=Math.sin(C.h),vx=pr.c.vx||0,vz=pr.c.vz||0,uf=vx*cp-vz*sp;
+        let ok=false;if(ph){ph.x=C.x;ph.z=C.z;ph.psi=C.h;ph.u=uf;ph.v=0;ph.yr=0;ph.omega=uf/0.33;ph.omegaF=ph.omega;ph.steer=pr.c.st||0;ph.brk=pr.c.b||0;ph.hand=0;ph.rpm=pr.c.rpm||900;ph.load=pr.c.ld||0;
+          try{v.y=carY(C.x,C.z,C.y);}catch(e){v.y=C.y;}v.pitT=pr.c.p||0;v.rolT=pr.c.r||0;v.lightsOn=!!pr.c.l;try{syncVehicle(v,dt);ok=true;}catch(e){}
+          // their engine, heard here
+          Object.assign(ph,{alive:true,parked:false,acc:false,alpha:1,sim:'phys',y:C.y,vk:Math.abs(uf)});if(ph.spec)aud.push(ph);}
+        if(!ok){v.node.position.set(C.x,C.y,C.z);v.node.rotation.set(pr.c.r||0,C.h,pr.c.p||0,'YXZ');try{stepPanels(v.m,dt);}catch(e){}}
+        try{if(pr.c.al&&!v.alarm)alarmStart(v,30);else if(!pr.c.al&&v.alarm)alarmStop(v);}catch(e){}
         // them at the wheel
         R.node.visible=true;netSeat(R,v,'driver','drive');}}
     else{if(R.car){scene.remove(R.car.node);R.car=null;R.carKey='';}
       // riding with someone (me, or another player)
-      if(pr.sit){const host=pr.sit.id===NET.me?DRIVE:(NET.rem.get(pr.sit.id)||{}).car;if(host){netSeat(R,host,pr.sit.s,'sit');continue;}}
+      if(pr.sit){const host=pr.sit.id===NET.me?DRIVE:(NET.rem.get(pr.sit.id)||{}).car;if(host){netSeat(R,host,pr.sit.s,'sit');netHold(R,null);continue;}}
       // on foot
-      R.node.visible=!pr.d;const k=Math.min(1,dt*10);R.pos.x+=(pr.x-R.pos.x)*k;R.pos.y+=(pr.y-R.pos.y)*k;R.pos.z+=(pr.z-R.pos.z)*k;if(R.pos.distanceTo(_nq.set(pr.x,pr.y,pr.z))>20)R.pos.set(pr.x,pr.y,pr.z);
-      R.psi+=wrapA((pr.h||0)-R.psi)*k;R.node.position.copy(R.pos);R.node.rotation.set(0,R.psi,0);g.position.set(0,0,0);g.rotation.set(0,0,0);
-      if(camera.position.distanceTo(R.pos)<90)npcPose(g,ME.t+R.ri,pr.g||0,dt);}
-}
+      R.node.visible=true;const k=Math.min(1,dt*10);R.pos.x+=(pr.x-R.pos.x)*k;R.pos.y+=(pr.y-R.pos.y)*k;R.pos.z+=(pr.z-R.pos.z)*k;if(R.pos.distanceTo(_nq.set(pr.x,pr.y,pr.z))>20)R.pos.set(pr.x,pr.y,pr.z);
+      R.psi+=wrapA((pr.h||0)-R.psi)*k;R.node.position.copy(R.pos);R.node.rotation.set(0,R.psi,0);
+      // dead, or knocked down: on the ground
+      if(pr.d||pr.rg){if(!R.down){R.down=true;netHold(R,null);g.position.set(0,0.12,0);g.rotation.set(0,0,Math.PI/2);try{apply(g.userData.npc,PZ());}catch(e){}}continue;}
+      if(R.down){R.down=false;}g.position.set(0,0,0);g.rotation.set(0,0,0);
+      netHold(R,pr.wp||null);npcPose(g,ME.t+R.ri,pr.g||0,dt);netBodyStep(R,pr,dt);}}
+  window.BAY_NETAUD=aud;
   for(const [id,R] of NET.rem)if(!seen.has(id)){netRemDrop(R);NET.rem.delete(id);if(NET.ride&&NET.ride.id===id)netRideOff();}}
+// what they hold (a gun, a bat), where they aim, a punch or a swing, prying an ATM, hands up
+function netHold(R,id){if(R.holdId===id)return;if(R.hold&&R.hold.parent)R.hold.parent.remove(R.hold);R.hold=null;R.holdId=id;if(!id||!R.g)return;
+  try{const N=R.g.userData.npc,m=new THREE.Group();
+    if(id.startsWith('m:')){const k=id.slice(2);if(!MELEE[k])return;const gm=melModel(k);gm.quaternion.copy(Q_MEL);m.add(gm);}
+    else{if(!WPN[id])return;const o=gunMount(id);m.add(o.m);}
+    m.position.copy(P_HG);m.quaternion.copy(Q_HG);N.arms.L.wr.add(m);R.hold=m;}catch(e){console.warn('net hold',e);R.hold=null;}}
+function netBodyStep(R,pr,dt){const g=R.g;netHold(R,pr.wp||null);g.updateMatrixWorld(true);
+  // aiming: both hands out along the aim
+  if(pr.am&&pr.wp&&!pr.wp.startsWith('m:')){const yaw=pr.ay||0,pit=pr.ap||0,cp=Math.cos(pit),dir=new THREE.Vector3(Math.cos(yaw)*cp,Math.sin(pit),-Math.sin(yaw)*cp);
+    const sh=g.userData.npc.joints.chest.getWorldPosition(V3()).add(new THREE.Vector3(0,0.1,0)),tgt=sh.clone().addScaledVector(dir,0.62);
+    R.node.rotation.y=Math.atan2(-dir.z,dir.x);R.node.updateMatrixWorld(true);armTo(g,'L',tgt,1,new THREE.Vector3(-0.2,-1,0.6));armTo(g,'R',tgt.clone().addScaledVector(dir,-0.08).add(new THREE.Vector3(0,-0.03,0)),1,new THREE.Vector3(-0.2,-1,-0.6));}
+  // a punch or a swing
+  const pu=R.punch;if(pu){pu.t+=dt;if(pu.m&&MELEE[pu.m]){const W=MELEE[pu.m],u=pu.t/W.dur;if(u>=1)R.punch=null;else try{melArm(g,u,W,null);}catch(e){}}
+    else{const u=pu.t/0.46;if(u>=1)R.punch=null;else try{punchArm(g,pu.h||'R',u,g.localToWorld(new THREE.Vector3(0.9,1.45,0)));}catch(e){}}}
+  // prying an ATM open
+  if(pr.rb!=null){const ph=(ME.t*1.6)%1,heave=ph<0.35?ezs(ph/0.35):1-ezs((ph-0.35)/0.65),fr=g.localToWorld(new THREE.Vector3(0.62,1.05-heave*0.12,0.06));
+    armTo(g,'L',fr,1,new THREE.Vector3(-0.3,-1,0.7));armTo(g,'R',fr.clone().add(new THREE.Vector3(0,0.14,0)),1,new THREE.Vector3(-0.3,-1,-0.7));
+    R.pryT=(R.pryT||0)-dt;if(R.pryT<=0&&ph>0.3&&ph<0.4){R.pryT=0.35;const a=SHOP.atms&&SHOP.atms[pr.rb];if(a)try{sndPry(a);}catch(e){}}}
+  // hands up
+  if(pr.hu){armTo(g,'R',g.localToWorld(new THREE.Vector3(0.05,1.95,-0.25)),0.95);armTo(g,'L',g.localToWorld(new THREE.Vector3(0.05,1.95,0.25)),0.95);}}
 // someone in a seat of a car: posed sitting there
 function netSeat(R,v,seat,kind){const S=(v.m.seats||[]).find(q=>q.name===seat)||(v.m.seats||[])[0];if(!S)return;v.node.updateMatrixWorld(true);
   R.node.position.copy(v.node.position);R.node.rotation.set(0,v.node.rotation.y,0);const p=seatLocal(v,S);R.g.position.copy(p);R.g.rotation.set(0,0,0);
@@ -18420,7 +18453,8 @@ function nwPack(){const O=nwOthers();if(!O.length)return null;const tr=[],cp=[],
     const sp=_w1(a.sim==='kin'?(a.vk||0):(a.u||0)),base=[a.id,a.tpl.key,'',_w1(a.x),_w2(a.y||0),_w1(a.z),_w2(a.psi),sp,0,_w2(a.gy||0)];
     if(a.unit){if(a.unit.st==='parked'||d>420)continue;const P=a.pd;base[2]=a.unitText||'';
       base[8]=(P&&P.lights?1:0)|(P&&P.lights&&P.siren&&P.role!=='dead'&&P.role!=='hold'?2:0)|(a.in&&a.in.brk>0.3?4:0)|(a.burnt?16:0)|(a.hazard?32:0)|(!a.cops||!a.cops.length||a.unit.out?64:0);cp.push([d,base]);continue;}
-    if(d>330||a.fade<=0)continue;base[2]=a.paintHex||'';if(a.driver&&a.drvI!=null)base[10]=[a.drvI,a.rideI||[]];
+    if(d>330||a.fade<=0)continue;base[2]=a.paintHex||'';base[10]=a.driver&&a.drvI!=null?[a.drvI,a.rideI||[]]:0;
+    {let st=(a.smoking?1:0)|(a.engDead?2:0)|(a.driverDead?4:0);(a.flat||[]).forEach((f,i)=>{if(f)st|=16<<i;});if(st)base[11]=st;}
     base[8]=(a.sigL?1:0)|(a.sigR?2:0)|(a.hazard?4:0)|(a.in&&a.in.brk>0.3?8:0)|(a.burnt?16:0)|(a.parked?64:0);tr.push([d,base]);}
   for(const p of PEDS){const d=nwNear(p.x,p.z,O);if(d>220)continue;
     pd.push([d,[p.id,p.cop?(p.k|0):p.ri,_w1(p.x),_w2(p.y),_w1(p.z),_w2(p.psi),_w2(p.mode==='rag'?0:(npcState(p.g).v||0)),(p.dead?1:0)|(p.mode==='rag'?2:0)|(p.cop?4:0)|(p.mode==='cower'||p.mode==='handsup'?8:0)]]);}
@@ -18459,6 +18493,7 @@ function nwFrame(dt){const now=performance.now();
   // where the others are, for the traffic and the people
   const O=[];for(const p of NET.peers){const pr=p.pr;if(pr&&typeof pr.x==='number')O.push([pr.x,pr.z]);}window.BAY_NETP=O;window.BAY_NETN=1+NET.peers.length;
   try{nwBumps();}catch(x){console.warn('bumps',x);}
+  if(ME.punch&&ME.punch!==NW.lastPunch){NW.lastPunch=ME.punch;nwEvent({k:'pu',h:ME.punch.hand||'R',m:ME.punch.mel||null});}
   // parked cars someone else has taken
   NW.pkOther.clear();for(const p of NET.peers){const L=p.pr&&p.pr.pk;if(Array.isArray(L))L.forEach(i=>NW.pkOther.add(i|0));}
   // the cars: traffic and police
@@ -18470,7 +18505,10 @@ function nwFrame(dt){const now=performance.now();
     const a=R.a,fl=e[8]|0;try{nwPuppetPush(R,a);}catch(x){}a.x=s[0];a.y=s[1];a.z=s[2];a.psi=s[3];a.u=s[4];a.vk=Math.abs(s[4]);a.v=0;a.yr=0;a.gy=s[5]||0;a.omega=a.u/(a.r||0.33);a.omegaF=a.omega;a.alpha=1;a.fade=1;
     const brk=R.cop?(fl&4):(fl&8);a.in.brk=brk?1:0;a.brk=a.in.brk;a.in.thr=brk?0:0.3;
     if(R.cop){a.netL=!!(fl&1);a.netS=!!(fl&2);a.hazard=!!(fl&32);cops.push(a);const crew=!(fl&64);if(crew!==!!a.cops)TR.remoteCar.crew(a,crew);}else{a.sigL=!!(fl&1);a.sigR=!!(fl&2);a.hazard=!!(fl&4);}
-    if((fl&16)&&!a.burnt)a.burnt=true;R.last={psi:a.psi,u:a.u};}
+    if((fl&16)&&!a.burnt)a.burnt=true;R.last={psi:a.psi,u:a.u};
+    const st=e[11]|0;if(st&&st!==R.st){R.st=st;try{if((st&1)&&!a.smoking){a.smoking=true;SMOKERS.push(a);}if(st&2)a.engDead=true;
+      if((st&4)&&!a.driverDead&&a.driver){a.driverDead=true;if(!a.driver.userData.dead){a.driver.userData.dead=true;slump(a.driver,true);}}
+      for(let i=0;i<4;i++)if((st&(16<<i))&&!(a.flat&&a.flat[i]))tyreFlat({a},i);}catch(x){}}}
   NW.cops=cops;window.BAY_NETCOPS=cops;
   // the station: the host's empty bays have no car here either
   {const eb=NW.host?null:NW.eb;const S=TR.pd.station();for(const u of TR.pd.units()){const bi=S&&u.bay?S.bays.indexOf(u.bay):-1;u.a.netHide=!!(eb&&u.st==='parked'&&bi>=0&&eb.includes(bi));}}
@@ -18490,8 +18528,10 @@ function nwFrame(dt){const now=performance.now();
   const seen=new Set();for(const p of NET.peers){const L=p.pr&&p.pr.pc;if(!Array.isArray(L))continue;
     L.forEach((c,i)=>{if(!Array.isArray(c)||c.length<6)return;const key=p.id+':'+i+':'+c[0]+'|'+c[1];seen.add(key);let R=NW.rpc.get(key);
       if(!R){const v=buildVehicle(c[0],c[1]);if(!v)return;v.alive=true;v.remote=p.id;scene.add(v.node);R={v};NW.rpc.set(key,R);}
-      const v=R.v;v.ph.x=c[2];v.ph.z=c[4];v.ph.psi=c[5];v.ph.u=0;v.ph.v=0;v.node.position.set(c[2],c[3],c[4]);v.node.rotation.set(0,c[5],0,'YXZ');});}
-  for(const [key,R] of NW.rpc)if(!seen.has(key)){scene.remove(R.v.node);NW.rpc.delete(key);}
+      const v=R.v;v.ph.x=c[2];v.ph.z=c[4];v.ph.psi=c[5];v.ph.u=0;v.ph.v=0;v.node.position.set(c[2],c[3],c[4]);v.node.rotation.set(0,c[5],0,'YXZ');
+      // its alarm going off (broken into), and its lights
+      try{if(c[6]&&!v.alarm)alarmStart(v,30);else if(!c[6]&&v.alarm)alarmStop(v);}catch(x){}v.lightsOn=!!c[7];});}
+  for(const [key,R] of NW.rpc)if(!seen.has(key)){try{alarmStop(R.v);}catch(x){}scene.remove(R.v.node);NW.rpc.delete(key);}
   // the cars traffic has to see: the others' cars too
   NW.xT-=dt;if(NW.xT<=0){NW.xT=0.5;try{refreshExtra();}catch(x){}}
   // and mine, to them
@@ -18502,7 +18542,7 @@ function nwClear(){for(const R of NW.rtr.values())if(R.a&&R.a.alive)TR.remove(R.
   try{for(const u of TR.pd.units())u.a.netHide=false;}catch(e){}try{refreshExtra();}catch(e){}}
 // my own cars standing about (not the one I'm driving), for the others
 function nwParkedMine(){const O=nwOthers();if(!O.length)return null;const L=[];
-  for(const v of CARS){if(!v.alive||v===DRIVE||!v.ph||v.remote)continue;if(nwNear(v.ph.x,v.ph.z,O)>300)continue;L.push([v.key,v.color,_w1(v.ph.x),_w2(v.node.position.y),_w1(v.ph.z),_w2(v.ph.psi)]);if(L.length>=6)break;}
+  for(const v of CARS){if(!v.alive||v===DRIVE||!v.ph||v.remote)continue;if(nwNear(v.ph.x,v.ph.z,O)>300)continue;L.push([v.key,v.color,_w1(v.ph.x),_w2(v.node.position.y),_w1(v.ph.z),_w2(v.ph.psi),v.alarm?1:0,v.lightsOn?1:0]);if(L.length>=6)break;}
   return L.length?L:null;}
 
 /* =====================================================================
@@ -18521,7 +18561,7 @@ function nwTarget(h){if(!h)return null;
     if(c.a){const a=c.a;if(a.remote){const R=a.nwR;return R?{t:'a',o:R.from,id:R.e[0],c:R.cop?1:0,node:a.root}:null;}return {t:'a',o:NET.me,id:a.id,c:a.unit?1:0,node:a.root};}
     if(c.v){const v=c.v;if(v.remote&&NET.rem.has(v.remote))return {t:'v',o:v.remote,node:v.node};if(v===DRIVE)return {t:'v',o:NET.me,node:v.node};return null;}}
   if(h.kind==='person'){const p=h.who;if(h.tk==='np')return {t:'p',o:p.from,id:p.e[0],node:p.node};if(h.tk==='rp')return {t:'pl',o:p.id,node:p.node};
-    if(h.tk==='ped')return {t:'p',o:NET.me,id:p.id,node:p.node};}
+    if(h.tk==='ped')return {t:'p',o:NET.me,id:p.id,node:p.node};if(h.tk==='clerk')return {t:'k',o:'*',node:p.node};}
   return null;}
 function nwShotOut(M,D,W,h){const w=nwWid(W);if(!w)return;const e={k:'s',M:[M.x,M.y,M.z].map(_r3),D:[D.x,D.y,D.z].map(_r3),w};
   const T=h&&h.kind!=='none'&&h.point?nwTarget(h):null;if(T){const [lp,ld]=nwLoc(T.node,h.point,D);e.tg={t:T.t,o:T.o,id:T.id,c:T.c,lp,ld};}nwEvent(e);}
@@ -18530,6 +18570,7 @@ function nwEnt(tg){const mine=tg.o===NET.me;
   if(tg.t==='a'){let a=null;if(mine)a=TR.byId(tg.id);else{const R=NW.rtr.get(tg.o+':'+(tg.c?'c':'')+tg.id);a=R&&R.a;}return a&&a.alive?{node:a.root,o:{onlyA:a},mine}:null;}
   if(tg.t==='v'){const v=mine?DRIVE:(NET.rem.get(tg.o)||{}).car;return v?{node:v.node,o:{onlyV:v},mine}:null;}
   if(tg.t==='p'){if(mine){const p=PEDS.find(q=>q.id===tg.id);return p?{node:p.node,o:{onlyP:p},mine}:null;}const R=NW.rped.get(tg.o+':'+tg.id);return R&&R.node?{node:R.node,o:{onlyP:R},mine}:null;}
+  if(tg.t==='k'){const C=SHOP.clerk;return C&&C.node?{node:C.node,o:{onlyP:C},mine:true}:null;}
   if(tg.t==='pl'){if(mine)return ME.it&&!ME.dead?{node:ME.it.node,o:{onlyP:ME,player:true},mine}:null;const R=NET.rem.get(tg.o);return R&&R.node?{node:R.node,o:{onlyP:R},mine}:null;}
   return null;}
 function nwShotIn(from,e){const W=WPN[e.w];if(!W||!Array.isArray(e.M)||!Array.isArray(e.D))return;const M=new THREE.Vector3(...e.M),D=new THREE.Vector3(...e.D).normalize();
@@ -18595,12 +18636,20 @@ function nwMeleeIn(e){
 function nwPatrolsNear(x,z,r){return (window.BAY_NETCOPS||[]).filter(a=>a.alive&&a.nwR&&!a.nwR.gone&&!a.netL&&Math.hypot(a.x-x,a.z-z)<r).sort((p,q)=>Math.hypot(p.x-x,p.z-z)-Math.hypot(q.x-x,q.z-z));}
 function nwAdopt(a){const R=a&&a.nwR;if(!R||R.gone||a.netL)return null;const u=TR.pd.adopt(R.e[1],a.x,a.y||0,a.z,a.psi,R.e[2]||null);if(!u)return null;
   try{TR.pd.phys(u.a);u.a.u=a.u||0;}catch(x){}R.gone=true;TR.remove(a);R.a=null;nwEvent({k:'g',o:R.from,id:R.e[0]});return u;}
-function nwGiveIn(e){try{TR.pd.give(e.id);}catch(x){console.warn('give',x);}}
+function nwGiveIn(e){try{TR.pd.give(e.id,!!e.f);}catch(x){console.warn('give',x);}}
+// getting into another game's police car (parked, left with its doors open, or with its crew in it): it becomes this game's first
+function nwAdoptAt(x,z){let best=null,bd=3;for(const a of (window.BAY_NETCOPS||[])){if(!a.alive||!a.nwR||a.nwR.gone)continue;const d=Math.hypot(a.x-x,a.z-z)-(a.halfWid||1);if(d<bd){bd=d;best=a;}}
+  if(!best)return null;const R=best.nwR,u=TR.pd.adopt(R.e[1],best.x,best.y||0,best.z,best.psi,R.e[2]||null);if(!u)return null;
+  if(R.e[8]&64)try{TR.remoteCar.crew(u.a,false);u.out=true;}catch(x){}
+  R.gone=true;TR.remove(best);R.a=null;nwEvent({k:'g',o:R.from,id:R.e[0],f:1});return u;}
 
 /* ---- what arrives ---- */
 function nwEvents(from,L){for(const e of L){if(!e||typeof e!=='object')continue;try{
   if(e.k==='s')nwShotIn(from,e);
   else if(e.k==='d'||e.k==='dv')nwDentIn(from,e);
+  else if(e.k==='pu'){const R=NET.rem.get(from);if(R)R.punch={t:0,h:e.h,m:e.m};try{const P=R&&R.node&&R.node.position;if(P&&camera.position.distanceTo(P)<40){if(e.m&&MELEE[e.m])sndMelSwing(MELEE[e.m]);else sndSwingPunch({node:R.node});}}catch(x){}}
+  else if(e.k==='atm'){const a=SHOP.atms&&SHOP.atms[e.i];if(a)atmBreak(a);}
+  else if(e.k==='bt'){const S=TR.pd.station(),b=S&&S.bays[e.i],u=b&&b.unit;if(u&&u.st==='parked')TR.pd.replace(u);}
   else if(e.o!==NET.me)continue;
   else if(e.k==='b')nwBumpIn(from,e);
   else if(e.k==='j')nwTookIn(e);
@@ -19397,6 +19446,7 @@ function wCruiserEnterable(a){const u=a.unit;const sp=Math.hypot(a.sim==='kin'?(
   const crewIn=!!(a.cops&&a.cops.some(g=>g.visible&&g.userData.seat))&&!(u&&u.foot)&&!(u&&u.out);
   if(crewIn)return {jack:true};if(a.parked||(u&&u.st==='parked'))return {jack:false,locked:true};return {jack:false,open:true};}
 function wStealCruiser(a,how){const u=a.unit;let thrown=0;
+  if(NET.on&&u&&u.bay)try{const S=TR.pd.station();nwEvent({k:'bt',i:S.bays.indexOf(u.bay)});}catch(e){}
   if(u){wWinRig(u,false);if(how.jack){const S=uSeats(u);['driver','passenger'].forEach(seat=>{if(!S[seat].alive)return;const m=(a.cops||[]).find(g=>g.userData.seat===seat&&!g.userData.rig&&g.visible);if(!m)return;m.visible=false;
       const q=wDoorSpot(a,seat,-0.1),p=copNew(u,seat,q.x,q.z,a.y||0,a.psi+(seat==='driver'?1:-1)*Math.PI/2);if(!p)return;thrown++;p.cs.st='chase';p.cs.door=null;
       const c=Math.cos(a.psi),s=Math.sin(a.psi),sg=seat==='driver'?1:-1;setTimeout(()=>{if(PEDS.includes(p)&&!p.dead)pedRag(p,new THREE.Vector3(-s*sg*3.2,0.8,-c*sg*3.2),new THREE.Vector3(c,0,-s).multiplyScalar(sg*3),false);},seat==='driver'?650:950);});}}
