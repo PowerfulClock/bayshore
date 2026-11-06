@@ -10621,7 +10621,7 @@ function trBuildMap(WD,opt){opt=opt||{};
     const rot=-ang,co=Math.cos(rot),si=Math.sin(rot);let x0=1e9,x1=-1e9,z0=1e9,z1=-1e9;
     P.forEach(p=>{const lx=p[0]*co-p[1]*si,lz=p[0]*si+p[1]*co;x0=Math.min(x0,lx);x1=Math.max(x1,lx);z0=Math.min(z0,lz);z1=Math.max(z1,lz);});
     const cx=(x0+x1)/2,cz=(z0+z1)/2;   // back to world: inverse rotation
-    return {x:cx*co+cz*si,z:-cx*si+cz*co,w:(x1-x0)*0.92,d:(z1-z0)*0.92,rot};});
+    return {x:cx*co+cz*si,z:-cx*si+cz*co,w:(x1-x0)*0.92,d:(z1-z0)*0.92,rot,h:Math.max(...b.t.map(t=>t.y1||0))};});
   MAP={roads,nodes,buildings,signals:nodes.filter(n=>n.signal).map(n=>n.signal)};
   return MAP;}
 function trMapStats(){return {roads:MAP.roads.length,nodes:MAP.nodes.length,approaches:MAP.nodes.reduce((s,n)=>s+n.approaches.length,0),signals:MAP.signals.length};}
@@ -10724,6 +10724,18 @@ function trBuildCivTemplate(key,pol){
   catch(e){console.warn('panel copy '+key,e);T.grpP=null;}
   trMergeStatic(A.shell,A.wheels,A.parts);
   TPL[key]=T;return T;}
+
+/* Occlusion culling for cars: a car whose top can't be seen from the camera past the buildings in between (their
+   footprints and their heights against the line of sight) isn't drawn. Each car is tested every few frames (a ray
+   walked through the building grid in 5 m steps); it's shown again as soon as a test finds a clear line. */
+const OCC={i:0,on:true,_c:null};
+function trOccH(x,yTop,z){const C=TRCAM.position,cx=C.x,cy=C.y,cz=C.z,dx=x-cx,dz=z-cz,d=Math.hypot(dx,dz);if(d<30)return false;const n=Math.floor(d/5);
+  for(let i=1;i<n;i++){const t=i/n,px=cx+dx*t,pz=cz+dz*t,ly=cy+(yTop-cy)*t;
+    for(const b of RN.bld.near(px,pz)){if(!(b.h>ly))continue;const c=Math.cos(b.rot||0),s=Math.sin(b.rot||0),lx=(px-b.x)*c-(pz-b.z)*s,lz=(px-b.x)*s+(pz-b.z)*c;
+      if(Math.abs(lx)<b.w/2-0.5&&Math.abs(lz)<b.d/2-0.5)return true;}}return false;}
+function trOccStep(cars){if(!OCC.on||window.PHOTO_ON||!cars.length)return;const n=cars.length,per=Math.max(4,Math.ceil(n/5));
+  for(let k=0;k<per&&k<n;k++){const a=cars[(OCC.i+k)%n];if(!a.alive||!a.root)continue;a.occ=trOccH(a.x,(a.y||0)+2.2,a.z);}
+  OCC.i=(OCC.i+per)%n;}
 
 /* ======================= ported from Back Roads (traffic.js), with the Bayshore patches from mkport.py ======================= */
 function trMats(root){const out=[];root.traverse(m=>{if(m.isMesh)(Array.isArray(m.material)?m.material:[m.material]).forEach(x=>out.push(x));});return out;}
@@ -11314,7 +11326,7 @@ function trSync(a,dt,force){
   {let pit=0;if(a.sim==='kin'&&a.path.length>2){const f=trAt(a,a.s+1.4),r=trAt(a,a.s-1.4);pit=Math.atan2((f.y||0)-(r.y||0),2.8);}else if(a.gy!=null)pit=a.gy;
    const k=dt?Math.min(1,dt*12):1;const yt=(a.y||0)+(a.sim==='kin'?0.06:0);if(a.vy_==null||!dt){a.vyo=0;a.vy_=yt;a.vp_=pit;}else{const j=yt-(a.ytp==null?yt:a.ytp);if(Math.abs(j)>Math.max(0.12,3*dt))a.vyo-=j;a.vyo*=Math.exp(-dt*6);a.vy_=yt+a.vyo;a.vp_+=(pit-a.vp_)*Math.min(1,dt*18);}a.ytp=yt;root.position.y=a.vy_;root.rotation.z=a.vp_;}
   const full=a.alpha>=1&&dc<(a.unit?(a.parked||a.unit.st==='parked'?Math.min(30,+CFG.gfx.trDetail||85):Math.min(55,+CFG.gfx.trDetail||85)):(+CFG.gfx.trDetail||85));
-  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700));if(root.visible!==shown)root.visible=shown;
+  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700))&&!(a.occ&&!window.PHOTO_ON);if(root.visible!==shown)root.visible=shown;
   if(a.full.visible!==full||force){a.full.visible=full;a.prox.visible=!full;}
   if(!full){const op=a.alpha;a.proxM.forEach(m=>{const tr=op<0.999;if(m.transparent!==tr){m.transparent=tr;m.depthWrite=!tr;}m.opacity=op;});}
   else if(dc<60&&a.sim==='phys'&&!a.parked){const P=car;car=a;try{stepSusp(Math.max(dt,0.001));}finally{car=P;}
@@ -11373,7 +11385,7 @@ function trTry(Tg,opt){
 function trafficReset(){trClear();TRAFFIC.warm=true;TRAFFIC.spawnT=0;TRAFFIC.copT=0;TRAFFIC.pStill=0;}
 const TRPB=[];
 function trGround(a){a.y=TRY?TRY(a.x,a.z,a.y):0;const cp=Math.cos(a.psi),sp=Math.sin(a.psi),fa=(a.tpl&&a.tpl.axF)||1.4,ra=(a.tpl&&-a.tpl.axR)||1.4,yf=TRY?TRY(a.x+cp*fa,a.z-sp*fa,a.y):a.y,yr=TRY?TRY(a.x-cp*ra,a.z+sp*ra,a.y):a.y;a.gy=Math.atan2(yf-yr,fa+ra);}
-function trafficFrame(dt){
+function trafficFrame(dt){try{trOccStep(TRAFFIC.cars);}catch(e){}
   if(!RN||!TP)return;TRAFFIC.t+=dt;TRAFFIC.frame++;
   _pm.multiplyMatrices(TRCAM.projectionMatrix,TRCAM.matrixWorldInverse);_frus.setFromProjectionMatrix(_pm);
   TRAFFIC.pStill=Math.hypot(TP.u,TP.v)<0.5?(TRAFFIC.pStill||0)+dt:0;
@@ -12721,6 +12733,27 @@ function makeTextures() {
   TEX.leaves = (() => { const c = tint(noiseCanvas(256, 5, 24, 0.7), [40, 64, 26], [96, 128, 52], 1.8), x = c.getContext('2d'), r = rng(25);
     for (let i = 0; i < 2500; i++) { x.fillStyle = 'rgba(' + (30 + r() * 40 | 0) + ',' + (60 + r() * 70 | 0) + ',' + (20 + r() * 30 | 0) + ',0.8)'; x.beginPath(); x.ellipse(r() * 256, r() * 256, 2 + r() * 3, 1 + r() * 2, r() * 3, 0, 7); x.fill(); }
     return texFrom(c); })();
+
+  // ---- foliage textures (Bayshore): leaf clusters for trees and shrubs, a fuller palm frond, a fan palm leaf, ringed palm bark
+  TEX.leafCard = (() => { const c = canvas(256, 256), x = c.getContext('2d'), r = rng(77); x.clearRect(0, 0, 256, 256);
+    for (let i = 0; i < 420; i++) { const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 118, px = 128 + Math.cos(a) * d, py = 128 + Math.sin(a) * d * 0.9, g = 70 + r() * 80, l = 7 + r() * 9;
+      x.fillStyle = 'rgb(' + (28 + r() * 40 | 0) + ',' + (g | 0) + ',' + (18 + r() * 34 | 0) + ')'; x.save(); x.translate(px, py); x.rotate(r() * 7); x.beginPath(); x.ellipse(0, 0, l, l * 0.42, 0, 0, 7); x.fill();
+      x.strokeStyle = 'rgba(20,40,10,0.5)'; x.lineWidth = 0.8; x.beginPath(); x.moveTo(-l, 0); x.lineTo(l, 0); x.stroke(); x.restore(); }
+    const t = new TH.CanvasTexture(c); t.encoding = TH.sRGBEncoding; t.anisotropy = 4; return t; })();
+  TEX.frond2 = (() => { const c = canvas(128, 512), x = c.getContext('2d'), r = rng(31); x.clearRect(0, 0, 128, 512);
+    for (let y = 504; y > 8; y -= 4.5) { const t = y / 512, L = 58 * Math.pow(Math.sin(Math.PI * t), 0.8) + 5, dr = 14 + L * 0.5;
+      for (const sd of [-1, 1]) { const g = 82 + r() * 60; x.strokeStyle = 'rgb(' + (40 + r() * 35 | 0) + ',' + (g | 0) + ',' + (26 + r() * 20 | 0) + ')'; x.lineWidth = 2.6 + r();
+        x.beginPath(); x.moveTo(64, y); x.quadraticCurveTo(64 + sd * L * 0.6, y - dr * 0.25, 64 + sd * L, y - dr); x.stroke(); } }
+    x.strokeStyle = '#6b7a3a'; x.lineWidth = 4; x.beginPath(); x.moveTo(64, 512); x.lineTo(64, 0); x.stroke();
+    const t = new TH.CanvasTexture(c); t.encoding = TH.sRGBEncoding; t.anisotropy = 4; return t; })();
+  TEX.fan = (() => { const c = canvas(256, 256), x = c.getContext('2d'), r = rng(41); x.clearRect(0, 0, 256, 256);
+    for (let i = 0; i < 46; i++) { const a = Math.PI * (0.05 + 0.9 * i / 45), L = 110 + r() * 14, g = 90 + r() * 50; x.strokeStyle = 'rgb(' + (52 + r() * 30 | 0) + ',' + (g | 0) + ',' + (40 + r() * 20 | 0) + ')'; x.lineWidth = 5;
+      x.beginPath(); x.moveTo(128, 240); x.lineTo(128 + Math.cos(a) * L, 240 - Math.sin(a) * L); x.stroke(); }
+    const t = new TH.CanvasTexture(c); t.encoding = TH.sRGBEncoding; t.anisotropy = 4; return t; })();
+  TEX.palmBark = (() => { const c = canvas(64, 256), x = c.getContext('2d'), r = rng(53); x.fillStyle = '#8a7e6c'; x.fillRect(0, 0, 64, 256);
+    for (let y = 0; y < 256; y += 6 + r() * 3) { x.fillStyle = 'rgba(60,52,42,' + (0.35 + r() * 0.3) + ')'; x.fillRect(0, y, 64, 1.5 + r() * 1.5); x.fillStyle = 'rgba(180,170,150,0.25)'; x.fillRect(0, y + 2, 64, 1); }
+    for (let i = 0; i < 300; i++) { x.fillStyle = 'rgba(' + (70 + r() * 60 | 0) + ',' + (62 + r() * 50 | 0) + ',' + (50 + r() * 40 | 0) + ',0.35)'; x.fillRect(r() * 64, r() * 256, 1 + r() * 3, 1 + r() * 2); }
+    return texFrom(c); })();
   TEX.frond = (() => { const c = canvas(64, 256), x = c.getContext('2d'); x.clearRect(0, 0, 64, 256);
     x.strokeStyle = '#4f6a2a'; x.lineWidth = 3; x.beginPath(); x.moveTo(32, 256); x.lineTo(32, 0); x.stroke();
     for (let y = 250; y > 6; y -= 5) { const L = 28 * Math.sin(Math.PI * (y / 256)) + 4, g = 90 + ((y * 7) % 40);
@@ -12865,10 +12898,13 @@ function makeMats() {
   MAT.plain = std({ vertexColors: true, roughness: 0.75 }); MAT.plainMetal = std({ vertexColors: true, roughness: 0.4, metalness: 0.5 });
   MAT.glass = std({ color: 0x1d2a36, roughness: 0.06, metalness: 0.9 });
   MAT.roof = std({ map: TEX.concrete, color: 0x9a9890, roughness: 0.95 });
-  MAT.lampHead = std({ color: 0xe8e6e0, emissive: 0xffd9a0, emissiveIntensity: 0, roughness: 0.4 });
+  MAT.lampHead = std({ color: 0xe8e6e0, emissive: 0xff9a3c, emissiveIntensity: 0, roughness: 0.4 });
   MAT.bark = std({ map: TEX.bark, roughness: 1 });
-  MAT.leaves = std({ map: TEX.leaves, vertexColors: true, roughness: 0.9 });
-  MAT.frond = std({ map: TEX.frond, alphaTest: 0.45, side: TH.DoubleSide, roughness: 0.85, transparent: false });
+  MAT.leaves = std({ map: TEX.leafCard, vertexColors: true, roughness: 0.85, alphaTest: 0.42, side: TH.DoubleSide });
+  MAT.frond = std({ map: TEX.frond2, alphaTest: 0.4, side: TH.DoubleSide, roughness: 0.8, transparent: false });
+  MAT.frondDead = std({ map: TEX.frond2, color: 0xb08a58, alphaTest: 0.4, side: TH.DoubleSide, roughness: 0.95 });
+  MAT.fan = std({ map: TEX.fan, alphaTest: 0.4, side: TH.DoubleSide, roughness: 0.8 });
+  MAT.palmBark = std({ map: TEX.palmBark, roughness: 0.95 });
   MAT.signal = std({ color: 0x23262b, roughness: 0.55 });
   MAT.roofTile = std({ vertexColors: true, roughness: 0.8 });
 }
@@ -13383,7 +13419,8 @@ function facadeMaterial() {
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
 varying vec3 vEx; varying vec2 vFac; uniform float uNight; uniform float uTime; uniform float uWinAmt;
 float h21(vec2 p){ p = mod(p, 251.0); vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
-float glassMask; float lit; vec2 cellG; vec2 cellF; float stG;
+float glassMask; float lit; vec2 cellG; vec2 cellF; float stG; vec3 roomLit = vec3(1.0,0.78,0.48); float roomOn = 0.0;
+vec3 accentCol(float h){ return h < 0.17 ? vec3(1.0,0.18,0.75) : h < 0.34 ? vec3(0.15,0.75,1.0) : h < 0.5 ? vec3(0.55,0.25,1.0) : h < 0.67 ? vec3(0.1,1.0,0.7) : h < 0.84 ? vec3(1.0,0.45,0.2) : vec3(1.0,0.9,0.75); }
 // the light in a lit window: offices mostly cool white; homes and flats incandescent, warm and cool LED, fluorescent,
 // a television's blue, an amber shade, now and then a coloured LED strip; shopfronts bright white or warm
 vec3 winCol(float h, float st, vec2 c) {
@@ -13431,7 +13468,34 @@ if (vEx.z > 0.5) {
   float aa = clamp(max(fwidth(vFac.x) / bay, fwidth(vFac.y) / fl) * 2.5 - 0.4, 0.0, 1.0);
   float cover = min(ww * wh * 1.6, 0.8);
   inWin = mix(inWin, cover, aa);
-  diffuseColor.rgb = mix(wall * (1.0 - 0.25 * frame * (1.0 - aa)), mix(glass, mix(vec3(0.06,0.1,0.13), vec3(0.17,0.24,0.3), 0.5), aa), inWin);
+  vec3 paneC = glass;
+  if (inWin > 0.01 && aa < 0.6 && ww > 0.01) {
+    vec3 Nv = normalize(vNormal), Uv = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
+    vec3 Tv = cross(Uv, Nv); float tl = length(Tv);
+    if (tl > 0.2) { Tv /= tl; vec3 Bv = normalize(cross(Nv, Tv)); vec3 rd = -normalize(vViewPosition);
+      vec2 wp = vec2((f.x - 0.5) / ww + 0.5, (f.y - 0.55) / wh + 0.5); if (vFac.y < ground) wp = vec2(fract(vFac.x / 4.0), (vFac.y - 0.25) / max(ground - 0.75, 0.5));
+      vec2 wsz = vFac.y < ground ? vec2(4.0, ground - 0.75) : vec2(bay * ww, fl * wh);
+      vec3 q = vec3(dot(rd, Tv) / wsz.x, dot(rd, Bv) / wsz.y, max(-dot(rd, Nv), 0.05) / 4.0);
+      // the room a bit bigger than the window: walls just past its edges
+      vec3 p = vec3(wp * 0.8 + 0.1, 0.0);
+      float tx = q.x > 0.0 ? (1.0 - p.x) / q.x : -p.x / min(q.x, -1e-4), ty = q.y > 0.0 ? (1.0 - p.y) / q.y : -p.y / min(q.y, -1e-4), tz = 1.0 / q.z;
+      float t = min(tx, min(ty, tz)); vec3 hp = p + q * t;
+      float rr = h21(cell + seed + 11.3);
+      vec3 wallIn = mix(vec3(0.62,0.58,0.52), vec3(0.75,0.72,0.66), rr), floorIn = mix(vec3(0.28,0.22,0.17), vec3(0.42,0.4,0.38), fract(rr * 3.7)), ceilIn = vec3(0.82);
+      vec3 rc = t == tz ? wallIn * (0.85 + 0.15 * step(0.5, fract(hp.x * 2.0 + rr))) : t == ty ? (q.y < 0.0 ? floorIn : ceilIn) : wallIn * 0.78;
+      // furniture silhouettes against the back wall, sometimes blinds half down
+      if (t == tz && hp.y < 0.35 && abs(hp.x - fract(rr * 5.1)) < 0.18) rc *= 0.45;
+      float blinds = step(0.72, fract(rr * 9.3)) * step(1.0 - 0.45 * fract(rr * 2.9), wp.y) * (0.75 + 0.25 * step(0.5, fract(wp.y * 14.0)));
+      float depth = clamp(hp.z, 0.0, 1.0);
+      rc *= (1.0 - 0.45 * depth);
+      rc = mix(rc, vec3(0.86,0.83,0.76) * 0.9, blinds);
+      float fres = pow(1.0 - clamp(-dot(rd, Nv), 0.0, 1.0), 3.0);
+      paneC = mix(rc * mix(0.32, 0.12, uNight), glass, clamp(0.3 + 0.6 * fres + (st < 0.5 ? 0.25 : 0.0), 0.0, 0.9));
+      roomLit = mix(vec3(1.0,0.78,0.48), vec3(0.85,0.9,1.0), step(0.75, h21(cell + seed + 3.7))) * mix(rc * 1.25, vec3(1.0), 0.35) * (1.0 - 0.3 * blinds);
+      roomOn = 1.0 - aa;
+    }
+  }
+  diffuseColor.rgb = mix(wall * (1.0 - 0.25 * frame * (1.0 - aa)), mix(paneC, mix(vec3(0.06,0.1,0.13), vec3(0.17,0.24,0.3), 0.5), aa), inWin);
   glassMask = inWin; cellG = cell; cellF = f; stG = st;
   lit = inWin * step(1.0 - uNight * 0.38 * uWinAmt, fract(r * 7.13 + 0.31)) * uNight * (0.45 + 0.55 * fract(r * 13.7));
   // faint sky reflection gradient on glass so panes read as glass rather than holes
@@ -13442,10 +13506,42 @@ if (vEx.z > 0.5) {
       .replace('#include <color_fragment>', '')
       .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = mix(roughnessFactor, 0.32, glassMask);')
       .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = mix(metalnessFactor, 0.15, glassMask);')
-      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{ float sdw = mod(floor(vEx.y+0.5),97.0); float hc = h21(cellG*1.37+sdw+3.7); float hb = h21(cellG*2.11+sdw+11.3); vec3 wc = winCol(hc, stG, cellG); float bw = (0.55+0.8*hb) * (0.72+0.42*smoothstep(0.25,0.95,cellF.y)); if (hc > 0.79 && hc < 0.87 && stG > 1.5 && cellG.y >= 0.0) bw *= 0.7 + 0.3*sin(uTime*(5.0+hb*9.0)+hc*40.0)*sin(uTime*(1.7+hb*3.0)+hb*13.0); if (cellG.y < -0.5) bw *= 1.4; totalEmissiveRadiance += lit * wc * bw * 0.95; }');
+      .replace('#include <emissivemap_fragment>', '#include <emissivemap_fragment>\n{ float sdw = mod(floor(vEx.y+0.5),97.0); float hc = h21(cellG*1.37+sdw+3.7); float hb = h21(cellG*2.11+sdw+11.3); vec3 wc = winCol(hc, stG, cellG); float bw = (0.55+0.8*hb) * (0.72+0.42*smoothstep(0.25,0.95,cellF.y)); if (hc > 0.79 && hc < 0.87 && stG > 1.5 && cellG.y >= 0.0) bw *= 0.7 + 0.3*sin(uTime*(5.0+hb*9.0)+hc*40.0)*sin(uTime*(1.7+hb*3.0)+hb*13.0); if (cellG.y < -0.5) bw *= 1.4; totalEmissiveRadiance += lit * mix(wc, wc * roomLit * 1.15, roomOn * 0.7) * bw * 0.95; } if (vEx.z > 0.5 && uNight > 0.01) { float sdB = mod(floor(vEx.y + 0.5), 97.0), topH = floor((vEx.y + 0.5) / 97.0), hb = h21(vec2(sdB, 7.13)), hc = h21(vec2(sdB, 2.71)); vec3 acc = accentCol(hc), acc2 = accentCol(fract(hc + 0.37)); if (hb < 0.6 && topH > 9.0) { float span = 6.0 + topH * 0.25; float wash = exp(-max(vFac.y, 0.0) / span) * (0.6 + 0.4 * cos(vFac.x * 1.0472)); totalEmissiveRadiance += uNight * wash * acc * (1.0 - 0.45 * glassMask); } if (hb > 0.3 && hb < 0.85 && topH > 22.0) { float crown = smoothstep(topH - 7.0, topH - 0.6, vFac.y) * (0.75 + 0.25 * step(0.5, fract(vFac.x / 3.0))); totalEmissiveRadiance += uNight * crown * acc2 * 0.9; } if (hb > 0.88 && topH > 30.0) { float strip = step(0.94, fract(vFac.x / 9.0)); totalEmissiveRadiance += uNight * strip * acc * 0.8; } }');
     m.userData.shader = sh;
   };
   FAC_MATS.push(m); return m;
+}
+/* Each building's own relief, chosen from its seed: a cornice round the top (deep or slim, its own shade), a plinth
+   at the street, bands every few floors on towers and mid-rises (how many floors apart, how deep), vertical fins on
+   some glass towers, and on the roof one of a penthouse, a water tank on legs, a mast, or an open crown frame. All
+   unit boxes and cylinders scaled into place and merged into the city's chunks (no extra draw calls). */
+const _BX = new TH.BoxGeometry(1, 1, 1), _CY = new TH.CylinderGeometry(0.5, 0.5, 1, 10);
+function shadeHex(h, k) { const c = new TH.Color(h); c.r = Math.min(1, c.r * k); c.g = Math.min(1, c.g * k); c.b = Math.min(1, c.b * k); return c.convertSRGBToLinear(); }
+function bldDetail(b, t, ti, poly, cx, cz, y0, y1, wallHex, RB, style) {
+  if (b.s === 'house' || b.s === 'barn' || b.s === 'storage') return;
+  const r = rng((b.seed || 1) * 7 + ti * 131), nP = poly.length, H = y1 - y0, top = ti === b.t.length - 1;
+  const trimHex = r() < 0.5 ? wallHex : (r() < 0.5 ? 0xe9e4d8 : 0x9aa1a8), trim = shadeHex(trimHex, 0.82 + r() * 0.3), band = shadeHex(wallHex, 0.86 + r() * 0.2);
+  const corD = 0.25 + r() * 0.5, corH = 0.35 + r() * 0.6, bandEvery = 2 + Math.floor(r() * 4), bandD = 0.12 + r() * 0.22, fins = style === 0 && r() < 0.55, finStep = 1.6 * (1 + Math.floor(r() * 2));
+  const fl = style === 0 ? 3.6 : style === 1 ? 3.4 : 3.1;
+  for (let i = 0; i < nP; i++) {
+    const a = poly[i], c = poly[(i + 1) % nP], len = Math.hypot(c[0] - a[0], c[1] - a[1]); if (len < 3) continue;
+    const ux = (c[0] - a[0]) / len, uz = (c[1] - a[1]) / len; let nx = uz, nz = -ux; const mx = (a[0] + c[0]) / 2, mz = (a[1] + c[1]) / 2;
+    if ((mx - cx) * nx + (mz - cz) * nz < 0) { nx = -nx; nz = -nz; }
+    const yaw = Math.atan2(-uz, ux), at = (d, y, h, dep, L, cc) => pushGeo(RB.get(MAT.plain, cx, cz), _BX, M4(mx + nx * d, y, mz + nz * d, yaw, L, h, dep), cc);
+    if (top) at(corD / 2, y1 - corH / 2, corH, corD, len + corD * 2, trim);                       // cornice
+    if (ti === 0 && H > 6) at(0.08, y0 + 0.9 + 0.5, 1.0, 0.16, len + 0.32, trim);                 // plinth
+    if ((style === 1 || style === 2) && H > 14) for (let y = y0 + fl * bandEvery; y < y1 - 2; y += fl * bandEvery) at(bandD / 2, y, 0.22, bandD, len + bandD * 2, band);
+    if (fins && H > 12) { const n = Math.floor(len / finStep); for (let k = 1; k < n; k++) { const s = -len / 2 + k * finStep; pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(mx + ux * s + nx * 0.2, (y0 + y1) / 2, mz + uz * s + nz * 0.2, yaw, 0.12, H - 0.6, 0.4), shadeHex(0x8d969e, 1)); } }
+  }
+  if (!top || H < 8) return;
+  const area = Math.abs(poly.reduce((s, p, i) => s + p[0] * poly[(i + 1) % nP][1] - poly[(i + 1) % nP][0] * p[1], 0)) / 2, R = Math.sqrt(area), k = r();
+  if (k < 0.3 && R > 12) { const w = R * (0.35 + r() * 0.2), h = 3 + r() * 3; pushGeo(RB.get(MAT.plain, cx, cz), _BX, M4(cx, y1 + h / 2, cz, r() * 3, w, h, w * (0.7 + r() * 0.5)), shadeHex(wallHex, 0.9)); pushGeo(RB.get(MAT.plain, cx, cz), _BX, M4(cx, y1 + h + 0.2, cz, 0, w + 0.6, 0.4, w * 0.9 + 0.6), trim); }
+  else if (k < 0.5) { const ox = cx + (r() - 0.5) * R * 0.4, oz = cz + (r() - 0.5) * R * 0.4, d = 2.5 + r() * 1.5; pushGeo(RB.get(MAT.plain, cx, cz), _CY, M4(ox, y1 + 2.4 + d * 0.5, oz, 0, d, d, d), shadeHex(0x7a6650, 1));
+    for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(ox + lx * d * 0.32, y1 + 1.2, oz + lz * d * 0.32, 0, 0.15, 2.4, 0.15), shadeHex(0x55595e, 1)); }
+  else if (k < 0.65 && H > 30) { const h = 6 + r() * 14; pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(cx, y1 + h / 2, cz, 0, 0.3, h, 0.3), shadeHex(0xb9bec4, 1)); }
+  else if (k < 0.85 && H > 24 && R > 14) { const w = R * 0.7, h = 3 + r() * 4, c2 = shadeHex(trimHex, 0.95);
+    for (const [lx, lz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(cx + lx * w / 2, y1 + h / 2, cz + lz * w / 2, 0, 0.35, h, 0.35), c2);
+    for (const s of [-1, 1]) { pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(cx, y1 + h, cz + s * w / 2, 0, w, 0.35, 0.35), c2); pushGeo(RB.get(MAT.plainMetal, cx, cz), _BX, M4(cx + s * w / 2, y1 + h, cz, 0, 0.35, 0.35, w), c2); } }
 }
 function buildBuildings() {
   const B = new Buckets(), fac = facadeMaterial(), roofB = new Buckets();
@@ -13454,7 +13550,7 @@ function buildBuildings() {
     const style = STYLE_ID[b.s] ?? 2, seed = (b.seed % 997) / 997;
     let wallHex = PALETTE[b.c] || (/^[0-9a-f]{6}$/.test(b.c) ? parseInt(b.c, 16) : 0xe0dcd2);
     if (b.s === 'glass' || b.s === 'terminal') wallHex = 0x6f8596;
-    const wc = col(wallHex);
+    const wc = col(wallHex), bTop = Math.max(...b.t.map(t => t.y1));
     b.t.forEach((t, ti) => {
       const poly = t.poly, y0 = t.y0 + (ti === 0 ? -0.5 : 0), y1 = t.y1, nP = poly.length;
       let cx = 0, cz = 0; poly.forEach(p => { cx += p[0]; cz += p[1]; }); cx /= nP; cz /= nP;
@@ -13463,7 +13559,7 @@ function buildBuildings() {
         const a = poly[i], c = poly[(i + 1) % nP], len = Math.hypot(c[0] - a[0], c[1] - a[1]);
         // CCW footprint (x east, z south): the outward face goes a -> c seen from outside
         const A = [a[0], y0, a[1]], Bq = [c[0], y0, c[1]], Cq = [c[0], y1, c[1]], D = [a[0], y1, a[1]];
-        const ex = [style, seed * 50, 1];
+        const ex = [style, seed * 50 + 97 * Math.round(bTop), 1];
         quad(bk, A, D, Cq, Bq, [run, y0 - (ti ? 0 : 0)], [run, y1], [run + len, y1], [run + len, y0], wc, ex);
         run += len;
       }
@@ -13484,6 +13580,7 @@ function buildBuildings() {
           quad(roofB.get(MAT.plain, cx, cz), A, up(A), up(Bq), Bq, null, null, null, null, wc);
           quad(roofB.get(MAT.plain, cx, cz), Bq, up(Bq), up(A), A, null, null, null, null, wc);
         }
+        bldDetail(b, t, ti, poly, cx, cz, y0, y1, wallHex, roofB, style);
         // rooftop plant: a few units on big roofs
         const area = Math.abs(poly.reduce((s, p, i) => s + p[0] * poly[(i + 1) % nP][1] - poly[(i + 1) % nP][0] * p[1], 0)) / 2;
         const rr = rng(b.seed), nU = Math.min(6, Math.floor(area / 250));
@@ -13513,8 +13610,8 @@ const TREES = new TH.Group();
 function cullTrees() {
   const cx = camera.position.x, cz = camera.position.z, far = 1400 + camera.position.y * 2;
   TREES.children.forEach(m => { if (m.userData.treeLo) return; const c = m.geometry.boundingSphere.center, d = Math.hypot(c.x - cx, c.z - cz) - m.geometry.boundingSphere.radius;
-    const lo = m.userData.lo, near = d < (window.BAY_TREE_LOD || 300);
-    m.visible = d < far && (!lo || near); m.castShadow = d < 260; if (lo) lo.visible = d < far && !near; });
+    const lo = m.userData.lo, near = d < (window.BAY_TREE_LOD || 300), F = m.userData.far || far;
+    m.visible = d < F && (!lo || near); m.castShadow = m.userData.noCast ? false : d < 260; if (lo) lo.visible = d < F && !near; });
 }
 class Inst {
   constructor(geo, mat, o) { this.geo = geo; this.mat = mat; this.o = o || {}; this.it = []; }
@@ -13529,25 +13626,25 @@ class Inst {
       g.boundingSphere = new TH.Sphere(new TH.Vector3(cx, cy, cz), rad);
       const im = new TH.InstancedMesh(g, this.mat, list.length);
       list.forEach((t, i) => { p.set(t[0], t[1], t[2]); s.set(t[3], t[4], t[3]); e.set(0, t[5], 0); q.setFromEuler(e); m.compose(p, q, s); im.setMatrixAt(i, m); });
-      im.castShadow = this.o.cast !== false; im.receiveShadow = true; parent.add(im);
+      im.castShadow = this.o.cast !== false; im.receiveShadow = true; if (this.o.far) im.userData.far = this.o.far; if (this.o.cast === false) im.userData.noCast = true; parent.add(im);
       if (this.o.lod) { const lg = this.o.lod.clone(); lg.boundingSphere = g.boundingSphere.clone(); const lo = new TH.InstancedMesh(lg, this.mat, list.length); lo.instanceMatrix = im.instanceMatrix;
         lo.castShadow = false; lo.receiveShadow = true; lo.visible = false; lo.userData.treeLo = true; im.userData.lo = lo; parent.add(lo); }
     });
   }
 }
-function palmGeo() {
+function palmGeo(bendK) {
   // trunk: slightly curved, tapering, 1 unit tall (scaled to the tree height)
   const segs = 10, rad = 7, P = [], U = [], idx = [];
-  for (let i = 0; i <= segs; i++) { const t = i / segs, bend = 0.05 * t * t, r = lerp(0.03, 0.019, t) * (1 + 0.08 * Math.sin(i * 2.7));
+  for (let i = 0; i <= segs; i++) { const t = i / segs, bend = (bendK == null ? 0.05 : bendK) * t * t, r = lerp(0.03, 0.019, t) * (1 + 0.08 * Math.sin(i * 2.7));
     for (let k = 0; k <= rad; k++) { const a = k / rad * Math.PI * 2; P.push(bend + Math.cos(a) * r, t, Math.sin(a) * r); U.push(k / rad, t * 12); } }
   for (let i = 0; i < segs; i++) for (let k = 0; k < rad; k++) { const a = i * (rad + 1) + k, b = a + 1, c = a + rad + 1, d = c + 1; idx.push(a, c, b, b, c, d); }
   const trunk = new TH.BufferGeometry(); trunk.setAttribute('position', new TH.Float32BufferAttribute(P, 3)); trunk.setAttribute('uv', new TH.Float32BufferAttribute(U, 2)); trunk.setIndex(idx); trunk.computeVertexNormals();
   // crown: 14 arching fronds, each a textured strip (alpha leaflets); crown origin at 0
   const F = [], FU = [], FI = []; const r2 = rng(5);
-  for (let f = 0; f < 14; f++) {
-    const a = f / 14 * Math.PI * 2 + r2() * 0.3, len = 4.6 + r2() * 1.6, lift = (f % 3) * 0.35 + 0.2, ca = Math.cos(a), sa = Math.sin(a), px = -sa, pz = ca, seg = 7, base = F.length / 3;
+  for (let f = 0; f < 18; f++) {
+    const a = f / 18 * Math.PI * 2 + r2() * 0.3, len = 4.6 + r2() * 1.6, lift = (f % 3) * 0.35 + 0.2, ca = Math.cos(a), sa = Math.sin(a), px = -sa, pz = ca, seg = 7, base = F.length / 3;
     for (let k = 0; k <= seg; k++) {
-      const t = k / seg, d = len * t, y = lift * Math.sin(t * 2.2) * (1 - t) + 0.6 * t - 2.6 * t * t * (0.6 + (f % 2) * 0.4), w = 0.9 * Math.sin(Math.PI * Math.min(1, t * 1.05 + 0.04)) + 0.15;
+      const t = k / seg, d = len * t, y = lift * Math.sin(t * 2.2) * (1 - t) + 0.6 * t - 2.6 * t * t * (0.6 + (f % 2) * 0.4), w = 1.15 * Math.sin(Math.PI * Math.min(1, t * 1.05 + 0.04)) + 0.15;
       const droop = -0.25 * t;
       F.push(ca * d + px * w, y + droop, sa * d + pz * w, ca * d - px * w, y + droop, sa * d - pz * w); FU.push(0, t, 1, t);
       if (k < seg) { const q = base + k * 2; FI.push(q, q + 2, q + 1, q + 1, q + 2, q + 3); }
@@ -13557,6 +13654,21 @@ function palmGeo() {
   return { trunk, crown };
 }
 function canopyGeo(seed, blobs, det) {
+  const r = rng(seed), P = [], N = [], U = [], C = [], I = [], cards = det === 0 ? 5 : 16;
+  for (let b = 0; b < blobs; b++) { const ox = (r() - 0.5) * 2.2, oy = (r() - 0.3) * 1.1, oz = (r() - 0.5) * 2.2, s = 1.3 + r() * 0.9;
+    for (let k = 0; k < cards; k++) { const u = r() * 2 - 1, th = r() * Math.PI * 2, rr = Math.sqrt(1 - u * u), dx = rr * Math.cos(th), dy = u * 0.8, dz = rr * Math.sin(th);
+      const d = Math.pow(r(), 0.5) * s * 0.85, cx = ox + dx * d, cy = oy + dy * d, cz = oz + dz * d, sz = (det === 0 ? 1.9 : 1.25) * s * (0.8 + r() * 0.4);
+      // a random orientation for the card, mostly facing out
+      const nx = dx + (r() - 0.5) * 0.8, ny = dy + (r() - 0.5) * 0.8, nz = dz + (r() - 0.5) * 0.8, nl = Math.hypot(nx, ny, nz) || 1, n = [nx / nl, ny / nl, nz / nl];
+      let ax = [n[1] * 0 - n[2] * 1, n[2] * 0 - n[0] * 0, n[0] * 1 - n[1] * 0]; let al = Math.hypot(...ax); if (al < 0.2) { ax = [1, 0, 0]; al = 1; } ax = ax.map(v => v / al);
+      const bx = [n[1] * ax[2] - n[2] * ax[1], n[2] * ax[0] - n[0] * ax[2], n[0] * ax[1] - n[1] * ax[0]], rot = r() * 6.28, cr = Math.cos(rot), sr = Math.sin(rot);
+      const e1 = ax.map((v, i) => (v * cr + bx[i] * sr) * sz / 2), e2 = ax.map((v, i) => (-v * sr + bx[i] * cr) * sz / 2), base = P.length / 3;
+      const ao = clamp(0.5 + 0.5 * (cy + 1.4) / 2.6, 0.45, 1), on = [dx, dy + 0.25, dz], ol = Math.hypot(...on) || 1;
+      [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(([a, c2], i) => { P.push(cx + e1[0] * a + e2[0] * c2, cy + e1[1] * a + e2[1] * c2, cz + e1[2] * a + e2[2] * c2); N.push(on[0] / ol, on[1] / ol, on[2] / ol); U.push((a + 1) / 2, (c2 + 1) / 2); C.push(ao, ao, ao); });
+      I.push(base, base + 1, base + 2, base, base + 2, base + 3); } }
+  const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.Float32BufferAttribute(P, 3)); g.setAttribute('normal', new TH.Float32BufferAttribute(N, 3));
+  g.setAttribute('uv', new TH.Float32BufferAttribute(U, 2)); g.setAttribute('color', new TH.Float32BufferAttribute(C, 3)); g.setIndex(I); return g; }
+function canopyGeoOld(seed, blobs, det) {
   // several lumpy spheres merged, darker underneath (vertex colours as ambient occlusion)
   const r = rng(seed), out = { p: [], n: [], u: [], c: [] };
   for (let b = 0; b < blobs; b++) {
@@ -13573,23 +13685,65 @@ function canopyGeo(seed, blobs, det) {
   const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.Float32BufferAttribute(out.p, 3)); g.setAttribute('normal', new TH.Float32BufferAttribute(out.n, 3));
   g.setAttribute('uv', new TH.Float32BufferAttribute(out.u, 2)); g.setAttribute('color', new TH.Float32BufferAttribute(out.c, 3)); return g;
 }
+// dead fronds hanging under a palm's crown (most palms that aren't trimmed have a skirt of them)
+function palmSkirt() { const F = [], FU = [], FI = [], r2 = rng(9);
+  for (let f = 0; f < 8; f++) { const a = f / 8 * Math.PI * 2 + r2() * 0.4, len = 3.2 + r2(), ca = Math.cos(a), sa = Math.sin(a), px = -sa, pz = ca, seg = 5, base = F.length / 3;
+    for (let k = 0; k <= seg; k++) { const t = k / seg, d = 0.6 + len * 0.25 * t, y = -len * t * 0.95, w = 0.55 * Math.sin(Math.PI * Math.min(1, t + 0.1)) + 0.1;
+      F.push(ca * d + px * w, y, sa * d + pz * w, ca * d - px * w, y, sa * d - pz * w); FU.push(0, 1 - t, 1, 1 - t); if (k < seg) { const q = base + k * 2; FI.push(q, q + 2, q + 1, q + 1, q + 2, q + 3); } } }
+  const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.Float32BufferAttribute(F, 3)); g.setAttribute('uv', new TH.Float32BufferAttribute(FU, 2)); g.setIndex(FI); g.computeVertexNormals(); return g; }
+// a cabbage palm's crown (Florida's own): a round head of fan leaves on stalks
+function fanCrown() { const P = [], U = [], I = [], r = rng(13);
+  for (let f = 0; f < 24; f++) { const u = r() * 1.6 - 0.6, th = r() * Math.PI * 2, rr = Math.sqrt(Math.max(0, 1 - u * u)), dx = rr * Math.cos(th), dy = u, dz = rr * Math.sin(th);
+    const cx = dx * 1.3, cy = dy * 1.0 + 0.2, cz = dz * 1.3, sz = 1.5 + r() * 0.5; const n = [dx, dy * 0.6 + 0.3, dz], nl = Math.hypot(...n); n[0] /= nl; n[1] /= nl; n[2] /= nl;
+    let ax = [-n[2], 0, n[0]]; const al = Math.hypot(...ax) || 1; ax = ax.map(v => v / al); const bx = [n[1] * ax[2] - n[2] * ax[1], n[2] * ax[0] - n[0] * ax[2], n[0] * ax[1] - n[1] * ax[0]], base = P.length / 3;
+    [[-1, 0], [1, 0], [1, 1], [-1, 1]].forEach(([a, c]) => { P.push(cx + ax[0] * a * sz / 2 + bx[0] * (c - 0.1) * sz, cy + ax[1] * a * sz / 2 + bx[1] * (c - 0.1) * sz, cz + ax[2] * a * sz / 2 + bx[2] * (c - 0.1) * sz); U.push((a + 1) / 2, c); });
+    I.push(base, base + 1, base + 2, base, base + 2, base + 3); }
+  const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.Float32BufferAttribute(P, 3)); g.setAttribute('uv', new TH.Float32BufferAttribute(U, 2)); g.setIndex(I); g.computeVertexNormals(); return g; }
+// is (x, z) inside a building? (a grid of footprints, for placing street trees and shrubs)
+let _BG = null;
+function inBld(x, z) { if (!_BG) { _BG = new Map(); WD.buildings.forEach(b => { const P = b.t[0].poly; let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; P.forEach(p => { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); });
+    for (let i = Math.floor(x0 / 40); i <= Math.floor(x1 / 40); i++) for (let j = Math.floor(z0 / 40); j <= Math.floor(z1 / 40); j++) { const k = i + ',' + j; if (!_BG.has(k)) _BG.set(k, []); _BG.get(k).push(P); } }); }
+  const L = _BG.get(Math.floor(x / 40) + ',' + Math.floor(z / 40)); if (!L) return false;
+  for (const P of L) { let c = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) { if ((P[i][1] > z) !== (P[j][1] > z) && x < (P[j][0] - P[i][0]) * (z - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0]) c = !c; } if (c) return true; }
+  return false; }
 function buildTrees() {
-  const PG = palmGeo();
-  const pTrunk = new Inst(PG.trunk, MAT.bark), pCrown = new Inst(PG.crown, MAT.frond);
+  const PG = palmGeo(), PGc = palmGeo(0.16), PGl = palmGeo(0.32);
+  const pTrunk = new Inst(PG.trunk, MAT.palmBark), pCrown = new Inst(PG.crown, MAT.frond), pTrunkC = new Inst(PGc.trunk, MAT.palmBark), pTrunkL = new Inst(PGl.trunk, MAT.palmBark);
+  const pSkirt = new Inst(palmSkirt(), MAT.frondDead, { cast: true }), sTrunk = new Inst(palmGeo(0.02).trunk, MAT.palmBark), sCrown = new Inst(fanCrown(), MAT.fan);
+  const shrubs = [0xd2e8a8, 0xb8d690, 0xe2ecb8].map(c => { const m = MAT.leaves.clone(); m.color.setHex(c); return new Inst(canopyGeo(91 + c % 7, 1), m, { lod: canopyGeo(91 + c % 7, 1, 0), far: 380, cast: false }); });
   const trunk = new Inst(new TH.CylinderGeometry(0.16, 0.28, 1, 7).translate(0, 0.5, 0), MAT.bark);
-  const leafMats = [0x5a7a36, 0x4a6a2e, 0x6a8440].map(c => { const m = MAT.leaves.clone(); m.color.setHex(c); return m; });
+  const leafMats = [0xd0e4a0, 0xb4cc88, 0xe4ecb4].map(c => { const m = MAT.leaves.clone(); m.color.setHex(c); return m; });
   const canopies = [0, 1, 2].map(i => leafMats.map(m => new Inst(canopyGeo(11 + i * 7, 3 + i), m, { lod: canopyGeo(11 + i * 7, 3 + i, 0) })));
   const forestCan = leafMats.map((m, i) => new Inst(canopyGeo(40 + i, 2), m, { lod: canopyGeo(40 + i, 2, 0) }));
-  const palm = (x, z, h) => { const y = heightAt(x, z) - 0.2, ry = R() * Math.PI * 2; pTrunk.add(x, y, z, h, ry);
-    const bend = 0.05 * h; pCrown.add(x + Math.cos(ry) * bend * -1 * 0 + Math.cos(-ry) * bend, y + h, z + Math.sin(-ry) * bend, clamp(h / 15, 0.65, 1.3), R() * 6); };
+  // palms: tall royal and queen palms (straight), coconut palms (leaning, some a long way), and short cabbage palms with
+  // round heads of fan leaves; many with a skirt of dead fronds under the crown
+  const palm = (x, z, h) => { const y = heightAt(x, z) - 0.2, ry = R() * Math.PI * 2, kind = R();
+    if (kind < 0.16) { const hh = h * (0.45 + R() * 0.2); sTrunk.add(x, y, z, hh * 1.7, ry, hh); sCrown.add(x, y + hh, z, clamp(hh / 6, 0.75, 1.3), R() * 6); if (R() < 0.6) pSkirt.add(x, y + hh - 0.2, z, clamp(hh / 9, 0.6, 1), R() * 6); return; }
+    const lean = kind < 0.6 ? 0.05 : kind < 0.85 ? 0.16 : 0.32, T = lean === 0.05 ? pTrunk : lean === 0.16 ? pTrunkC : pTrunkL, hh = h * (lean === 0.05 ? 1 : 0.8), bend = lean * hh;
+    T.add(x, y, z, hh, ry); const cx = x + Math.cos(-ry) * bend, cz = z + Math.sin(-ry) * bend, s = clamp(hh / 15, 0.65, 1.3) * (0.85 + R() * 0.3);
+    pCrown.add(cx, y + hh, cz, s, R() * 6); if (R() < 0.45) pSkirt.add(cx, y + hh - 0.3, cz, s * 0.9, R() * 6); };
   const broad = (x, z, h) => { const y = heightAt(x, z) - 0.2, s = h / 7.5; trunk.add(x, y, z, s * 0.9, 0, h * 0.5);
     canopies[(R() * 3) | 0][(R() * 3) | 0].add(x, y + h * 0.66, z, s * (0.95 + R() * 0.2), R() * 6, s * (0.85 + R() * 0.2)); };
   const forest = (x, z, h) => { const y = heightAt(x, z) - 0.2, s = h / 7; if (R() < 0.3) trunk.add(x, y, z, s * 0.9, 0, h * 0.5); forestCan[(R() * 3) | 0].add(x, y + h * 0.62, z, s * (1.05 + R() * 0.25), R() * 6, s * (0.9 + R() * 0.2)); };
+  // palms along the sidewalks of city streets (between the lamps, clear of buildings, both sides, varied heights)
+  ROADS.forEach(r => { if (!r.sw || r.highway || r.streetSurf) return; const hw = r.width / 2;
+    (r.keep || []).forEach(([s0, s1]) => { let side = R() < 0.5 ? 1 : -1;
+      for (let s = s0 + 17; s < s1 - 8; s += 22 + R() * 14) { const p = along(r, s), t = tangentAt(r, s); side = -side; if (R() < 0.25) continue;
+        const x = p[0] - t[1] * side * (hw + 1.4), z = p[1] + t[0] * side * (hw + 1.4); if (inBld(x, z) || inBld(x - t[1] * side * 1.5, z + t[0] * side * 1.5)) continue;
+        palm(x, z, 7 + R() * 12); } }); });
+  // shrubs and hedges along the fronts of low and mid-rise buildings
+  { let nS = 0; WD.buildings.forEach(b => { if (nS > 30000 || !/^(mid|low|motel|shop|house)$/.test(b.s)) return; const P = b.t[0].poly, rb = rng((b.seed || 1) + 5); if (rb() < 0.35) return;
+      let cx = 0, cz = 0; P.forEach(p => { cx += p[0]; cz += p[1]; }); cx /= P.length; cz /= P.length;
+      for (let i = 0; i < P.length; i++) { const a = P[i], c = P[(i + 1) % P.length], len = Math.hypot(c[0] - a[0], c[1] - a[1]); if (len < 4 || rb() < 0.4) continue;
+        const ux = (c[0] - a[0]) / len, uz = (c[1] - a[1]) / len; let nx = uz, nz = -ux; if (((a[0] + c[0]) / 2 - cx) * nx + ((a[1] + c[1]) / 2 - cz) * nz < 0) { nx = -nx; nz = -nz; }
+        const hedge = rb() < 0.3, step = hedge ? 1.1 : 2.4 + rb() * 2;
+        for (let s = 1.2; s < len - 1; s += step) { const x = a[0] + ux * s + nx * 0.9, z = a[1] + uz * s + nz * 0.9; if (inBld(x + nx * 0.6, z + nz * 0.6)) continue;
+          const h = hedge ? 0.9 : 0.7 + rb() * 0.9; shrubs[(rb() * 3) | 0].add(x, heightAt(x, z) - 0.05 + h * 0.45, z, h * 0.42, rb() * 6, h * 0.38); nS++; } } }); }
   WD.trees.forEach(t => {
     const [k, x, z, h] = t;
     if (k === 'p') palm(x, z, clamp(h, 6, 22)); else if (k === 'f') forest(x, z, clamp(h, 6, 15)); else broad(x, z, clamp(h, 5, 16));
   });
-  [pTrunk, pCrown, trunk, ...canopies.flat(), ...forestCan].forEach(i => i.build(TREES));
+  [pTrunk, pTrunkC, pTrunkL, pCrown, pSkirt, sTrunk, sCrown, ...shrubs, trunk, ...canopies.flat(), ...forestCan].forEach(i => i.build(TREES));
   ROOT.add(TREES);
 }
 
@@ -18235,15 +18389,29 @@ function pdPts(r){const G=gpsGraph(),M=TR.map(),out=[];
   return out;}
 function pdWant(a,gx,gz,maxAge){const P=a.pd,R=P.R;
   // no route at all yet: work it out now (one A*), so a car never sets off blind
-  if(!R&&(!P.firstR||WANT.t-(P.rqT||0)>1)){P.firstR=1;P.gx=gx;P.gz=gz;try{const from=gpsNearest(a.x,a.z,a.y),to=gpsNearest(gx,gz,null);if(from>=0&&to>=0){let r=gpsRoute(from,to,true);if(!r)r=gpsRoute(from,to,false);pdApply(a,P,r&&r.length>1?pdPts(r):null,gx,gz);P.rqT=WANT.t;return;}}catch(e){}}maxAge=Math.max(maxAge,3);const near=Math.hypot(a.x-gx,a.z-gz);if(R&&Math.hypot(R.gx-gx,R.gz-gz)<Math.max(20,near*0.25)&&WANT.t-R.t<maxAge*(near>300?2.5:1))return;if(P.rqT&&WANT.t-P.rqT<1.2)return;P.rqT=WANT.t;if(!WANT.rq.includes(a))WANT.rq.push(a);P.gx=gx;P.gz=gz;}
+  if(!R&&(!P.firstR||WANT.t-(P.rqT||0)>1)){P.firstR=1;P.gx=gx;P.gz=gz;try{const from=pdFrom(a),to=gpsNearest(gx,gz,null);if(from>=0&&to>=0){let r=gpsRoute(from,to,true);if(!r)r=gpsRoute(from,to,false);pdApply(a,P,r&&r.length>1?pdPts(r):null,gx,gz);P.rqT=WANT.t;return;}}catch(e){}}maxAge=Math.max(maxAge,3);const near=Math.hypot(a.x-gx,a.z-gz);if(R&&Math.hypot(R.gx-gx,R.gz-gz)<Math.max(20,near*0.25)&&WANT.t-R.t<maxAge*(near>300?2.5:1))return;if(P.rqT&&WANT.t-P.rqT<1.2)return;P.rqT=WANT.t;if(!WANT.rq.includes(a))WANT.rq.push(a);P.gx=gx;P.gz=gz;}
 function routeQueue(){let n=0;if((WANT.rqSkip=(WANT.rqSkip||0)+1)%2)return;while(WANT.rq.length&&n<1){const a=WANT.rq.shift();if(!a.alive||!a.pd)continue;n++;const P=a.pd;
-    let from=-1,to=-1;try{from=gpsNearest(a.x,a.z,a.y);to=gpsNearest(P.gx,P.gz,null);}catch(e){}
+    let from=-1,to=-1;try{from=pdFrom(a);to=gpsNearest(P.gx,P.gz,null);}catch(e){}
     const gx=P.gx,gz=P.gz,seq=P.rseq=(P.rseq||0)+1;
     // on another core when there are workers (always in the desktop app); the answer is used when it comes back
     if(from>=0&&to>=0){const sent=thrRoute(from,to,r=>{if(!a.alive||a.pd!==P||P.rseq!==seq)return;pdApply(a,P,r&&r.length>1?pdPts(r):null,gx,gz);});
       if(sent==='later'){WANT.rq.unshift(a);return;}if(sent)continue;}
     let pts=null;try{if(from>=0&&to>=0){let r=gpsRoute(from,to,true);if(!r)r=gpsRoute(from,to,false);if(r&&r.length>1)pts=pdPts(r);}}catch(e){console.warn('pd route',e);}
     pdApply(a,P,pts,gx,gz);}}
+// where a route starts: the street node a little ahead of the car when it's moving (so the route doesn't begin by
+// turning round), the nearest one when it's stopped
+function pdFrom(a){const v=a.sim==='kin'?(a.vk||0):(a.u||0);if(v>5){const L=clamp(v*0.8,8,30),i=gpsNearest(a.x+Math.cos(a.psi)*L,a.z-Math.sin(a.psi)*L,a.y);if(i>=0)return i;}return gpsNearest(a.x,a.z,a.y);}
+/* Keeping up (what the big open-world games do): a police car the player can't see (off screen, or behind buildings)
+   and well back from him drives as if it had more of everything: harder in the bends, faster on the straights, quicker
+   to pick up speed. The player never sees it cheat; what he sees is cars that stay with him. Seen, or close, it's back
+   to the ordinary buffed driver. */
+function pdCatch(a,d){const P=a.pd;P.cuT=(P.cuT||0)-1;if(P.cuT<=0){P.cuT=6;P.unseen=!TR.pd.seen(a.x,a.z,5);}   // looked at every few thinks (the test walks the building grid)
+  const k=P.unseen&&d>70?clamp((d-70)/160,0,1):0;P.cu=k;
+  if(a.pdBuff&&a.mu){const mu=a.pdBuff.mu*1.35*(1+0.35*k);if(Math.abs(a.mu-mu)>1e-3)a.mu=mu;}
+  return k;}
+// where to aim when he's out of reach: where he'll be by the time we get near (his speed for a few seconds ahead), not
+// where he is now
+function pdLead(a,S,d){if(!S.car||S.spd<8)return [S.x,S.z];const t=clamp(d/45,0,5);return [S.x+S.vx*t,S.z+S.vz*t];}
 function pdApply(a,P,pts,gx,gz){
     if(!pts)pts=[[gx,gz,a.y||0,0]];
     // skip the bit of the route behind us
@@ -18254,8 +18422,8 @@ function pdApply(a,P,pts,gx,gz){
 function pdOnRoute(a,R){const P=R.pts;let bi=R.i,bd=1e9;for(let k=R.i;k<Math.min(P.length,R.i+30);k++){const d=Math.hypot(P[k][0]-a.x,P[k][1]-a.z);if(d<bd){bd=d;bi=k;}}R.i=bi;return bd;}
 function pdAhead(R,a,ld){const P=R.pts;let i=R.i,acc=0,px=a.x,pz=a.z;while(i<P.length){const d=Math.hypot(P[i][0]-px,P[i][1]-pz);if(acc+d>=ld){const t=(ld-acc)/Math.max(d,1e-3);return [px+(P[i][0]-px)*t,pz+(P[i][1]-pz)*t];}acc+=d;px=P[i][0];pz=P[i][1];i++;}
   return P.length?[P[P.length-1][0],P[P.length-1][1]]:[a.x,a.z];}
-function pdCornerV(R,a,vmax){const P=R.pts;let s=Math.hypot(P[R.i][0]-a.x,P[R.i][1]-a.z),v=vmax;
-  for(let k=R.i;k<P.length&&s<160;k++){if(k>R.i)s+=Math.hypot(P[k][0]-P[k-1][0],P[k][1]-P[k-1][1]);const kap=P[k][3];if(kap>0.004){const vc=Math.sqrt(W_LAT/kap);v=Math.min(v,Math.sqrt(vc*vc+2*W_BRK*Math.max(0,s-4)));}}
+function pdCornerV(R,a,vmax,kc){const P=R.pts,WL=W_LAT*(1+(kc||0)*0.9),WB=W_BRK*(1+(kc||0)*0.6);let s=Math.hypot(P[R.i][0]-a.x,P[R.i][1]-a.z),v=vmax;
+  for(let k=R.i;k<P.length&&s<160;k++){if(k>R.i)s+=Math.hypot(P[k][0]-P[k-1][0],P[k][1]-P[k-1][1]);const kap=P[k][3];if(kap>0.004){const vc=Math.sqrt(WL/kap);v=Math.min(v,Math.sqrt(vc*vc+2*WB*Math.max(0,s-4)));}}
   let end=true;{let ss=Math.hypot(P[R.i][0]-a.x,P[R.i][1]-a.z);for(let k=R.i+1;k<P.length;k++){ss+=Math.hypot(P[k][0]-P[k-1][0],P[k][1]-P[k-1][1]);if(ss>200){end=false;break;}}s=ss;}
   return {v,rem:s,end};}
 
@@ -18286,14 +18454,15 @@ function pdGoal(a,me){const P=a.pd;switch(P.role){
   case 'stop':return P.slot?[P.slot.x,P.slot.z]:null;
   default:return null;}}
 // far away (kinematic): along the route at the speed the bends allow
-function pdKin(a,dt,me){const P=a.pd;P.trem=null;const g=pdGoal(a,me);if(!g){a.ad=-6;return;}
-  pdWant(a,g[0],g[1],P.role==='pursue'?3:8);
+function pdKin(a,dt,me){const P=a.pd;P.trem=null;let g=pdGoal(a,me);if(!g){a.ad=-6;return;}
+  if(P.role==='pursue')g=pdLead(a,me,Math.hypot(me.x-a.x,me.z-a.z));pdWant(a,g[0],g[1],P.role==='pursue'?3:8);
   if(P.R&&(P.rebuild||P.kinR!==P.R)){TR.pd.path(a,P.R.pts.slice(P.R.i));P.rebuild=false;P.kinR=P.R;}
   const L=a.path;if(!L||L.length<2||a.mode!=='pd'){a.ad=-5;return;}
-  let vt=P.siren?34:P.role==='respond'?23:14;
-  for(let j=a.k;j<L.length;j++){const ds=L[j].s-a.s;if(ds>150)break;if(L[j].kap>0.004){const vc=Math.sqrt(W_LAT/L[j].kap);vt=Math.min(vt,Math.sqrt(vc*vc+2*6*Math.max(0,ds-3)));}}
+  const dm=Math.hypot(me.x-a.x,me.z-a.z),kc=P.role==='pursue'||P.role==='trail'||P.role==='respond'?pdCatch(a,dm):0;
+  let vt=(P.siren?34:P.role==='respond'?23:14)*(1+kc*0.4);const WL=W_LAT*(1+kc*1.2);
+  for(let j=a.k;j<L.length;j++){const ds=L[j].s-a.s;if(ds>150)break;if(L[j].kap>0.004){const vc=Math.sqrt(WL/L[j].kap);vt=Math.min(vt,Math.sqrt(vc*vc+2*(6+kc*4)*Math.max(0,ds-3)));}}
   const rem=L[L.length-1].s-a.s;vt=Math.min(vt,Math.sqrt(2*4*Math.max(0,rem-6)));
-  a.ad=clamp((vt-a.vk)*1.4,-7,4);}
+  a.ad=clamp((vt-a.vk)*1.4,-7-kc*3,4+kc*5);}
 // near (real physics): pure pursuit steering toward a target point, pedals for a target speed
 function pdPhys(a,dt,ALL,me){const P=a.pd,c=Math.cos(a.psi),s=Math.sin(a.psi),v=a.u||0;
   if(P.revT>0){P.revT-=dt;a.state='R';a.in.thr=Math.min(0.4,(1.3-P.revT)*1.2);a.in.brk=0;a.in.hand=0;a.in.steer=P.revS;P.st=P.revS;if(P.revT<=0){a.state='D';a.gear=0;a.in.brk=0.6;}return;}
@@ -18386,13 +18555,13 @@ function pdPursue(a,dt,ALL,me,c,s,v){const P=a.pd,u=a.unit,S=me,dx=S.x-a.x,dz=S.
   {const tr=pdTrail(a,v,!see);
     if(tr){const rk=P.rank||0,gap=(WANT.stars<=1?14:9)+rk*15;let vt=see?vs+(tr.rem-gap)*0.4:32;if(see&&tr.rem<gap)vt=Math.max(0,vs-(gap-tr.rem)*0.9);
       const ld=P.lead&&P.lead.alive?P.lead:null;if(ld&&ld.pd&&ld.pd.trem!=null){const gl=P.trem-ld.pd.trem;if(gl<14){const lv=ld.sim==='phys'?(ld.u||0):(ld.vk||0);vt=Math.min(vt,lv+(gl-10)*0.5);}}
-      vt=Math.min(vt,tr.vmax);if(!see)vt=Math.min(vt,Math.sqrt(2*4*Math.max(0,tr.rem-6))+2);if(S.foot)vt=Math.min(vt,Math.max(3,d*0.6));
+      {const kc=pdCatch(a,tr.rem);if(kc>0)vt=Math.max(vt,Math.min(48,tr.vmax*(1+kc*0.45)));else vt=Math.min(vt,tr.vmax);}if(!see)vt=Math.min(vt,Math.sqrt(2*4*Math.max(0,tr.rem-6))+2);if(S.foot)vt=Math.min(vt,Math.max(3,d*0.6));
       return [tr.T,clamp(vt,0,46),me.ph];}
     // not on his track (yet): straight at him only when close and nearly in line, else the streets onto it
     if(see&&d<22&&Math.abs(l)<f*0.6){const gap=WANT.stars<=1?14:9,T=[S.x+S.vx*0.4,S.z+S.vz*0.4];let vt=vs+(d-gap)*0.45;if(d<gap&&f>0)vt=Math.max(0,vs-(gap-d)*0.9);return [T,clamp(vt,0,26),me.ph];}}
   // out of sight or far: the route to where he is
-  pdWant(a,S.x,S.z,d<200?1.5:4);const R=P.R;if(!R)return [[S.x,S.z],8,me.ph];
-  pdOnRoute(a,R);const T=pdAhead(R,a,clamp(5+v*0.5,6,24)),cv=pdCornerV(R,a,34);let vt=cv.v;if(cv.end&&cv.rem<12)vt=Math.min(vt,8);
+  const kc=pdCatch(a,d),G=d>60?pdLead(a,S,d):[S.x,S.z];pdWant(a,G[0],G[1],d<200?1.5:4);const R=P.R;if(!R)return [[S.x,S.z],8,me.ph];
+  pdOnRoute(a,R);const T=pdAhead(R,a,clamp(5+v*0.5,6,24)+kc*6),cv=pdCornerV(R,a,34+kc*14,kc);let vt=cv.v;if(cv.end&&cv.rem<12)vt=Math.min(vt,8);
   return [T,vt,null];}
 
 // the suspect's track: a point every 2.5 m of where they SAW him go (on foot or driving), the last ~1 km. Out of
@@ -19017,13 +19186,11 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
-    'Dade Hardware on Dade Trail: buy a bat, crowbar, knife, machete, hammer, wrench or golf club (bottom of the weapon wheel)',
-    'Crowbar out at an ATM: E to pry it open (about 10 s, move to give up). $1,000, an alarm and two stars when it breaks; anyone who sees you calls it in',
-    'Cars fly over crests and bumps, land on their springs, and can roll over (steer to rock one back off its roof)',
-    'Crashes dent the bodywork, deeper the harder the hit',
-    'Police: at most three cars out at once (a pursuit counts), and driving past the station no longer sends the parked ones out',
-    'Faster: far trees drawn simpler, distant people cheaper, less wasted anti-aliasing',
-    'No more location prompt, and this window when the game updates']}];
+    'Police keep up: out of your sight they drive harder to close the gap, aim for where you\'re heading, and plan routes from the road ahead of them',
+    'Palms of every kind (tall royals, leaning coconuts, round cabbage palms, dead-frond skirts), leafy trees, shrubs and hedges, palms along city sidewalks',
+    'Buildings each with their own cornices, bands, fins and rooftops; windows with rooms behind them',
+    'Night: orange sodium street lights visible from across the city, coloured floodlights and crowns on the towers',
+    'Gun shop counter fixed; cars hidden behind buildings no longer drawn (faster)']}];
 function updCard(head,sub,list,buttons){const old=document.getElementById('updCard');if(old)old.remove();
   const d=document.createElement('div');d.id='updCard';
   d.style.cssText='position:fixed;inset:0;z-index:100000;display:flex;align-items:center;justify-content:center;background:rgba(8,4,18,.55);backdrop-filter:blur(3px);font-family:Barlow,system-ui,sans-serif';
@@ -19254,7 +19421,7 @@ function lightsSync(){const g=CFG.gfx,night=!!(todNow&&todNow.lamps>0),ls=+g.lsh
    shadows first, then point lights) and the rest light the ground with a painted pool of light instead (LPOOL) */
 function lampPoolVis(){if(typeof LAMP_POOL==='undefined')return;const night=!!(todNow&&todNow.lamps>0),nl=LT.lamps.length;
   LAMP_POOL.forEach(L=>{if(L.visible)L.visible=false;});}   // the lamps light through the lamp term in every material now (lampsTerm)
-const lampCol=(x,z)=>{const h=Math.abs(Math.sin(x*12.9898+z*78.233)*43758.5453)%1;return h<0.6?0xfff0dc:0xffb36a;};   // LED or sodium
+const lampCol=(x,z)=>{const h=Math.abs(Math.sin(x*12.9898+z*78.233)*43758.5453)%1;return h<0.5?0xff9a3c:0xffa850;};   // high-pressure sodium: every street lamp the warm orange of a Miami night
 function lightsFrame(){if(!LT.list.length||!todNow||!todNow.lamps){return;}const T=todNow;
   // your headlights
   const v=DRIVE,H=LT.hl[0];if(v&&H){const Q=v.lamps&&v.lamps.Q,c=[Q&&Q.FL&&Q.FL.n?Q.FL:null,Q&&Q.FR&&Q.FR.n?Q.FR:null];
@@ -19435,7 +19602,7 @@ function lglowStep(){const T=todNow,night=!!(T&&T.lamps>0);if(typeof LAMPS==='un
     const m=new THREE.ShaderMaterial({uniforms:{uI:{value:1},uPx:{value:600}},transparent:true,depthWrite:false,blending:THREE.AdditiveBlending,vertexColors:true,
       vertexShader:`uniform float uPx; uniform float uI; varying vec3 vC; varying float vA;
         void main(){ vec4 mv = modelViewMatrix * vec4(position,1.0); float d = -mv.z; float px = uPx * 1.6 / max(d, 1.0);
-          gl_PointSize = clamp(px, 2.5, 48.0); vA = uI * smoothstep(25.0, 90.0, d) * clamp(px / 2.5, 0.5, 1.0); vC = color; gl_Position = projectionMatrix * mv; }`,
+          gl_PointSize = clamp(px, 3.2, 48.0); vA = uI * smoothstep(25.0, 90.0, d) * (px < 3.2 ? 1.25 : 1.0); vC = color; gl_Position = projectionMatrix * mv; }`,
       fragmentShader:`varying vec3 vC; varying float vA; void main(){ vec2 q = gl_PointCoord*2.0-1.0; float r2 = dot(q,q); if (r2 > 1.0) discard;
           float k = exp(-r2*5.0)*0.85 + exp(-r2*30.0)*1.6; gl_FragColor = vec4(vC * vA * k, 1.0); }`});
     LGLOW.pts=new THREE.Points(g,m);LGLOW.pts.frustumCulled=false;LGLOW.pts.renderOrder=6;LGLOW.pts.userData.fx=true;LGLOW.n=N;scene.add(LGLOW.pts);}
