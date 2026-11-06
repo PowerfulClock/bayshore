@@ -11301,10 +11301,10 @@ function trVisual(a,paintHex){
   full.traverse(o=>{if(o.isMesh)o.material=Array.isArray(o.material)?o.material.map(remap):remap(o.material);});a.remap=remap;
   const inner=full.children[0];a.full=full;a.shell=inner.children[T.iShell];a.wheels=T.iWheels.map(i=>inner.children[i]);
   // the driver: one of the template's seated people, at the wheel
-  a.riders=[];a.occ=[];if(T.drivers&&T.drivers.length&&!a.parked){const di=Math.floor(Math.random()*T.drivers.length),d=T.drivers[di].clone();a.shell.add(d);a.driver=d;a.occ.push({seat:'driver',ri:T.driverRi?T.driverRi[di]:0});
+  a.riders=[];a.occ=[];if(T.drivers&&T.drivers.length&&!a.parked){const di=Math.floor(Math.random()*T.drivers.length),d=T.drivers[di].clone();a.shell.add(d);a.driver=d;a.drvI=di;a.occ.push({seat:'driver',ri:T.driverRi?T.driverRi[di]:0});
     // passengers: usually none or one, now and then a car full (more than two people is uncommon)
     const q=Math.random(),extra=q<0.62?0:q<0.9?1:q<0.97?2:3,R=T.riders||{},seats=['passenger',...(Math.random()<0.5?['rearL','rearR']:['rearR','rearL'])].filter(k=>R[k]&&R[k].length);
-    for(let i=0;i<Math.min(extra,seats.length);i++){const L=R[seats[i]],k=Math.floor(Math.random()*L.length),p=L[k].clone();a.shell.add(p);a.riders.push(p);a.occ.push({seat:seats[i],ri:T.riderRi&&T.riderRi[seats[i]]?T.riderRi[seats[i]][k]:0});}}
+    for(let i=0;i<Math.min(extra,seats.length);i++){const L=R[seats[i]],k=Math.floor(Math.random()*L.length),p=L[k].clone();a.shell.add(p);a.riders.push(p);(a.rideI=a.rideI||[]).push([seats[i],k]);a.occ.push({seat:seats[i],ri:T.riderRi&&T.riderRi[seats[i]]?T.riderRi[seats[i]][k]:0});}}
   // the body's resting pose: the suspension moves it from here (these models sit the shell off the origin)
   a.shB={y:a.shell.position.y,z:a.shell.position.z,rx:a.shell.rotation.x,rz:a.shell.rotation.z};a.brakeM=map.get(T.brake)||null;a.headM=map.get(T.head)||null;
   root.add(full);
@@ -11396,13 +11396,13 @@ function trafficFrame(dt){try{trOccStep(TRAFFIC.cars);}catch(e){}
   if(TRAFFIC.frame%15===0){let m=1e9;MAP.nodes.forEach(n=>{m=Math.min(m,Math.hypot(n.x-TP.x,n.z-TP.z)-(n.R||10));});TRAFFIC.pNodeD=m;
     // is the player just sitting in a queue? (a car close in front of them)
     const cp=Math.cos(TP.psi),sp=Math.sin(TP.psi);TRAFFIC.pBlocked=TRAFFIC.cars.some(o=>{const dx=o.x-TP.x,dz=o.z-TP.z,f=dx*cp-dz*sp,l=dx*sp+dz*cp;return f>0&&f<16&&Math.abs(l)<2.6;});}
-  const Tg=trTargets(),cars=TRAFFIC.cars;
+  const Tg=trTargets(),cars=TRAFFIC.cars;{const np=window.BAY_NETN|0;if(np>1){Tg.target=Math.round(Tg.target/np);Tg.hard=Math.max(4,Math.round(Tg.hard/np));}}
   /* keep the population near the target */
-  const moving=cars.filter(a=>a.alive&&!a.parked&&!a.unit&&(!a.remote||(a.netTr&&Math.hypot(a.x-TP.x,a.z-TP.z)<400))&&a.fade>0).length;   // other games' traffic near us counts too
+  const moving=cars.filter(a=>a.alive&&!a.parked&&!a.unit&&(!a.remote||(!window.BAY_NETN&&a.netTr&&Math.hypot(a.x-TP.x,a.z-TP.z)<400))&&a.fade>0).length;   // other games' traffic near us counts too
   TRAFFIC.spawnT-=dt;
-  if(TRAFFIC.warm){let n=0;while(cars.filter(a=>!a.parked&&!a.unit&&(!a.remote||a.netTr)).length<Tg.target&&n++<Tg.target*2){if(!trTry(Tg,{warm:true,Rmin:Tg.cw>0.5?40:80}))break;}
+  if(TRAFFIC.warm){let n=0;while(cars.filter(a=>!a.parked&&!a.unit&&(!a.remote||(!window.BAY_NETN&&a.netTr))).length<Tg.target&&n++<Tg.target*2){if(!trTry(Tg,{warm:true,Rmin:Tg.cw>0.5?40:80}))break;}
     cars.forEach(a=>{if(!trSeen(a.x,a.z,3))a.alpha=1;});TRAFFIC.warm=false;}
-  else if(TRAFFIC.spawnT<=0&&moving<Tg.target&&cars.length<Tg.hard+6){TRAFFIC.spawnT=Tg.interval*(0.6+Math.random()*0.8);
+  else if(TRAFFIC.spawnT<=0&&moving<Tg.target&&(window.BAY_NETN?cars.filter(a=>!a.remote).length:cars.length)<Tg.hard+6){TRAFFIC.spawnT=Tg.interval*(0.6+Math.random()*0.8);
     trTry(Tg,{});}
   // police are not traffic: they are the persistent units of the police system
   /* remove the ones that are far away (fading if you could see them go); police, and other players' cars, are not traffic */
@@ -11678,6 +11678,14 @@ window.BAYTR={
     lights(a,on,stopped,cam,rend,dark){const u=a.unit;if(!u)return null;const G=a.ghostL||(a.ghostL={id:u.id,dept:'bayshore'});G.lights=!!on;G.st=stopped?'stop':'patrol';
       const Lm=lightsInit();Lm.set(cam,rend,TRAFFIC.t,dark,!!stopped);a.unit=null;a.ghostUnit=G;try{Lm.polLights(a);}finally{a.unit=u;a.ghostUnit=null;}return a.lbLevel||null;},
     stop(a){TR_API_stop(a);},
+    // online: another game's patrol car, handed to this one (it carries on from where it was, now this game's unit)
+    adopt(key,x,y,z,psi,txt){const S=BPD.st;if(!S||!TPL[key])return null;const a=trCreate(key,{parked:true,x,z,psi,instant:true,unitText:txt||('B'+(BPD.nextId++))});if(!a)return null;
+      a.y=y||0;a.vy_=null;a.parked=false;a.state='D';a.in.brk=0;a.in.hand=0;trSync(a,0,true);a.persist=true;Object.assign(a.pers,{dv:2,sigP:0.97,rollP:0,T:1.5,lateP:0.05});
+      const cops=BPD.cops||[0,1,2,3,4],n=BPD.units.length;
+      const u={id:a.unitText,a,st:'patrol',bay:null,home:S,mode:'patrol',departAt:0,shiftEnd:BPD.t+90,restUntil:0,parkT:-1e9,brainT:0,retire:false,legs:0,crew:[cops[(n*2)%cops.length],cops[(n*2+1)%cops.length]],adopted:true};
+      a.unit=u;a.mode='patrol';BPD.units.push(u);try{polCrew(u,true);}catch(e){}try{polPatrolDest(u);}catch(e){}return u;},
+    // online: hand one of mine over (it isn't on a call): gone from here, a new car will be fitted out at the station later
+    give(id){const u=BPD.units.find(q=>q.a.id===id);if(!u||u.a.pd||!u.a.alive||u.st==='parked')return false;polRemoveUnit(u);BPD.rosterT=0;return true;},
     seen:(x,z,r)=>trSeen(x,z,r),
     lanes:(ri,T)=>trLanes(MAP.roads[ri],T)},
   seen:(x,z,r)=>trSeen(x,z,r),
@@ -11698,15 +11706,23 @@ window.BAYTR={
         if(a.panicT<=0){a.fleeTurned=false;a.panicStuck=0;}}
       if(!a.scaredT)continue;a.scaredT-=dt;if(a.scaredT<=0){a.scaredT=0;if(a.persB){Object.assign(a.pers,a.persB);a.persB=null;}}}},
   remove:a=>{if(a&&a.alive)trRemove(a);},
+  // online: one of this game's own cars by its number, and a knock from another game (a change in its velocity)
+  byId:id=>TRAFFIC.cars.find(a=>a.id===id&&a.alive&&!a.remote)||null,
+  push(a,dvx,dvz){if(!a||!a.alive)return;if(a.sim==='kin')trToPhys(a);a.awake=true;const c=Math.cos(a.psi),s=Math.sin(a.psi),vx=a.u*c-(a.v||0)*s+dvx,vz=-a.u*s-(a.v||0)*c+dvz;a.u=vx*c-vz*s;a.v=-vx*s-vz*c;},
   // online: another game's car (traffic or police), moved here by the network and never driven by this game
   remoteCar:{
-    make(key,col,x,y,z,psi,txt){if(!TPL[key])return null;const a=trCreate(key,{parked:true,instant:true,x,z,psi,color:col||undefined,unitText:txt||undefined});if(!a)return null;
+    make(key,col,x,y,z,psi,txt,occ){if(!TPL[key])return null;const a=trCreate(key,{parked:true,instant:true,x,z,psi,color:col||undefined,unitText:txt||undefined});if(!a)return null;
       Object.assign(a,{parked:false,awake:true,remote:true,netTr:true,state:'D',alpha:1,fade:1,sim:'phys',mode:'remote',u:0,v:0,yr:0,gear:1,rpm:900});a.r=a.r||0.33;
-      a.in={thr:0,brk:0,steer:0,hand:0};a.y=y||0;a.vy_=null;a.susp={f:0,r:0,vf:0,vr:0,roll:0,vroll:0};trSync(a,0,true);return a;},
+      a.in={thr:0,brk:0,steer:0,hand:0};a.y=y||0;a.vy_=null;a.susp={f:0,r:0,vf:0,vr:0,roll:0,vroll:0};
+      // the same people inside as in the game it comes from
+      const T=TPL[key];if(Array.isArray(occ)&&T&&T.drivers&&T.drivers.length&&!a.driver){const di=Math.min(T.drivers.length-1,occ[0]|0),d=T.drivers[di].clone();a.shell.add(d);a.driver=d;a.occ.push({seat:'driver',ri:T.driverRi?T.driverRi[di]:0});
+        const R=T.riders||{};(occ[1]||[]).forEach(q=>{const L=R[q[0]];if(!L||!L.length)return;const k=Math.min(L.length-1,q[1]|0),p=L[k].clone();a.shell.add(p);a.riders.push(p);a.occ.push({seat:q[0],ri:T.riderRi&&T.riderRi[q[0]]?T.riderRi[q[0]][k]:0});});}
+      trSync(a,0,true);return a;},
     // the light bar of another game's police car
     lights(a,on,cam,rend,dark){const G=a.ghostL||(a.ghostL={id:'n'+a.id,dept:'bayshore'});G.lights=!!on;G.st='patrol';const Lm=lightsInit();Lm.set(cam,rend,TRAFFIC.t,dark,false);
       const u=a.unit;a.unit=null;a.ghostUnit=G;try{Lm.polLights(a);}finally{a.unit=u;a.ghostUnit=null;}return a.lbLevel||null;},
-    has:k=>!!TPL[k]},
+    has:k=>!!TPL[k],
+    crew(a,on){try{polCrew({a,crew:[a.id%5,(a.id+1)%5]},on);}catch(e){}}},
   // a car that can't go on (its driver shot, its engine shot, a flat): it brakes to a stop with its hazards on and stays
   stopCar(a,flat,coast){if(!a||!a.alive||a.parked)return;if(a.sim==='kin')trToPhys(a);if(!a.acc)trAccident(a);a.accT=TRAFFIC.t;a.dead=true;a.coast=!!coast;a.hazard=!flat&&!coast;},
   spawnParked(key,o){if(!TPL[key])return null;const a=trCreate(key,{parked:true,instant:true,x:o.x,z:o.z,psi:o.psi,color:o.color||undefined});if(!a)return null;
@@ -14956,7 +14972,7 @@ function carBoxD(ph,hl,hw,x,z){const c=Math.cos(ph.psi),s=Math.sin(ph.psi),dx=x-
 // the car you'd get into from here: your own or one you've broken into, or a parked one (to break into)
 function carToEnter(){const P=ME.it.pl;let best=null;
   for(const v of CARS){if(!v.alive)continue;const b=carBoxD(v.ph,v.halfLen,v.halfWid,P.x,P.z);if(b.d<1.4&&Math.abs(P.y-v.y)<1.2&&(!best||b.d<best.d))best={v,d:b.d,side:b.side};}
-  for(const a of TR.cars()){if(!a.alive||a.alpha<1||a.remote)continue;
+  for(const a of TR.cars()){if(!a.alive||a.alpha<1||(a.remote&&(!a.nwR||a.nwR.cop||a.nwR.gone)))continue;   // another game's traffic can be taken too (that game lets it go)
     // a police car: with officers in it (they're thrown out), parked at the station (broken into), or left empty
     if(a.unit||(a.tpl&&a.tpl.police)){const h=wCruiserEnterable(a);if(!h)continue;const b=carBoxD(a,a.halfLen,a.halfWid,P.x,P.z);if(b.d<1.4&&Math.abs(P.y-(a.y||0))<1.2&&(!best||b.d<best.d))best={a,jack:h.jack,cop:h,d:b.d,side:b.side};continue;}
     // parked: break in; in traffic: only one that has stopped (under 2 mph) with someone at the wheel
@@ -14965,7 +14981,7 @@ function carToEnter(){const P=ME.it.pl;let best=null;
   return best;}
 function enterCar(){const it=ME.it,P=it.pl;if(ME.seq)return;const c=carToEnter();if(!c)return;
   let v=c.v,jk=null;if(c.a&&c.cop){v=wStealCruiser(c.a,c.cop);if(!v)return;if(c.cop.jack)jk={v,thrown:null};}
-  else if(c.a){if(c.jack){jk=fromTraffic(c.a,c.side);if(!jk)return;v=jk.v;}else{v=fromParked(c.a);if(!v)return;}}
+  else if(c.a){const nwA=c.a.remote?c.a:null;if(c.jack){jk=fromTraffic(c.a,c.side);if(!jk)return;v=jk.v;}else{v=fromParked(c.a);if(!v)return;}if(nwA)try{nwTookPuppet(nwA);}catch(e){}}
   if(c.a&&!c.cop){try{crime(c.jack?'carjack':'steal',v.ph.x,v.ph.z,{veh:v});}catch(e){console.warn('wanted',e);}}
   if(Math.hypot(v.ph.u,v.ph.v)>1.2){toast('That car is moving');return;}
   let r=carRig(v,c.side);if(!r&&c.side==='R')r=carRig(v,'L');const rd=carRig(v,'L');
@@ -15163,7 +15179,7 @@ function stepOne(v,dt){const ph=v.ph,VACC=v.acc||(v.acc={t:0});
     if(mg>0.8&&(!big||mg>big.mag))big={dvx:dx,dvz:dz,mag:mg,p:ph.hitP};
     bodyStep(v,H);VACC.t-=H;n++;}
   v.hitT=(v.hitT||0)-dt;
-  if(big&&(v.hitT<=0||big.mag>(v.lastMag||0)*1.5)){v.hitT=0.25;v.lastMag=big.mag;try{hitVehicle(v,big.dvx,big.dvz,big.mag,big.p);}catch(e){console.warn('damage',e);}}
+  if(big&&(v.hitT<=0||big.mag>(v.lastMag||0)*1.5)){v.hitT=0.25;v.lastMag=big.mag;try{hitVehicle(v,big.dvx,big.dvz,big.mag,big.p);}catch(e){console.warn('damage',e);}if(NET.on&&DRIVE===v)try{nwVehDentOut(v,big.dvx,big.dvz,big.mag,big.p);}catch(e){}}
   if(n>=24)VACC.t=0;
   if(DRIVE===v&&ph.crash>0){try{L.crashFor(ph.crash);}catch(e){}ph.crash=0;}
   if(v.B&&v.B.free){v.y=v.B.y-v.B.hcg;ph.y=v.y;
@@ -15548,13 +15564,13 @@ function trafficDmg(a){if(a.dmg)return a.dmg;let t0=performance.now();const part
     windows,lamps,decals:0,m:{parts,shell:a.shell,wheels:a.wheels,seats:a.seatsP||[],wheelObj:a.wheelObjP||null,bp:a.tpl.bp,S:a.tpl.S,wheelR:a.tpl.wheelR},a,skip:isOcc};}
 let TRD_T=0;
 function trafficDamageStep(dt){if(!dt||!TR.cars)return;const cars=TR.cars();let budget=1;   // at most one hit worked out per frame
-  for(const a of cars){if(!a.alive&&a.alive!==undefined)continue;
+  for(const a of cars){if(!a.alive&&a.alive!==undefined)continue;if(a.remote){a._pv=null;continue;}   // another game's car: its game sends its dents
     const u=a.sim==='kin'?(a.vk||0):(a.u||0),vv=a.sim==='kin'?0:(a.v||0),c=Math.cos(a.psi),s=Math.sin(a.psi);
     const vx=u*c-vv*s,vz=-u*s-vv*c;
     if(a._pv&&a._pv.sim===a.sim&&a.full&&a.full.visible&&a.root.visible){
       const dvx=vx-a._pv.x,dvz=vz-a._pv.z,mag=Math.hypot(dvx,dvz),lim=Math.max(1.6,13*dt);
       if(mag>lim&&budget>0){budget--;try{const D=trafficDmg(a);Object.assign(D.ph,{x:a.x,z:a.z,psi:a.psi,u:a.u||u,v:a.v||0});D.y=a.vy_!=null?a.vy_:(a.y||0);
-        a.root.updateMatrixWorld(true);hitVehicle(D,dvx,dvz,mag*1.15);
+        a.root.updateMatrixWorld(true);hitVehicle(D,dvx,dvz,mag*1.15);if(NET.on)try{nwDentOut(a,dvx,dvz,mag*1.15);}catch(e){}
         if(mag>2.5&&camera.position.distanceTo(a.root.position)<45)sndCrunch(mag);}catch(e){console.warn('traffic damage',e);}}}
     a._pv={x:vx,z:vz,sim:a.sim};}}
 
@@ -15882,7 +15898,7 @@ function seatDoor(v,seat){const m=v.m,sg=/L$|driver/.test(seat)?-1:1,front=seat=
   return m.parts.find(p=>p.kind==='door'&&(p.s<0)===(sg<0)&&p.front===front)||m.parts.find(p=>p.kind==='door'&&(p.s<0)===(sg<0)&&p.front)||null;}
 function victimsFor(v,occ){const out=[];
   (occ||[]).forEach(o=>{const seat=(v.m.seats||[]).find(q=>q.name===o.seat);if(!seat)return;const g=victimNPC(o.ri),node=new THREE.Group();node.add(g);scene.add(node);
-    const V={g,node,v,seat,name:o.seat,sg:/L$|driver/.test(o.seat)?-1:1,door:seatDoor(v,o.seat),mode:'seat',t:0,delay:null,pos:new THREE.Vector3(),rot:0,
+    const V={ri:o.ri|0,g,node,v,seat,name:o.seat,sg:/L$|driver/.test(o.seat)?-1:1,door:seatDoor(v,o.seat),mode:'seat',t:0,delay:null,pos:new THREE.Vector3(),rot:0,
       kind:o.seat==='driver'?'drive':/^rear/.test(o.seat)?'rear':'sit',voice:0.8+Math.random()*0.7,screams:0};
     V.pos.copy(seatLocal(v,seat));out.push(V);VICTIMS.push(V);});
   return out;}
@@ -16199,6 +16215,7 @@ function playerPunch(){if(melHeld()){melSwing();return;}const it=ME.it;if(!it||M
 // who you'd hit: the nearest person close in front of you
 // (the people you pulled out of their cars, running off, count too)
 function punchTarget(x,z,psi,reach){let best=null,bd=1e9;const L=PEDS.filter(p=>!p.dead&&p.mode!=='rag');for(const V of VICTIMS)if(V.mode==='run'&&!V.dead&&!V.rag)L.push(V);
+  if(NET.on)try{L.push(...nwPunchables());}catch(e){}
   for(const p of L){const dx=p.x-x,dz=p.z-z,d=Math.hypot(dx,dz);if(d>reach)continue;
     const a=Math.abs(wrapA(Math.atan2(-dz,dx)-psi));if(a>0.95)continue;if(d+a*0.5<bd){bd=d+a*0.5;best=p;}}return best;}
 // a punch on someone you pulled out of their car: they go down after a hit or two (and stay down if it was too much)
@@ -16209,7 +16226,7 @@ function playerPunchStep(dt){const it=ME.it,P=it.pl,pu=ME.punch;if(!pu)return;pu
   // square up to whoever is close in front
   const T=punchTarget(P.x,P.z,P.psi,2.2);if(T&&pu.t<0.2){const want=Math.atan2(-(T.z-P.z),T.x-P.x);P.psi+=clamp(wrapA(want-P.psi),-8*dt,8*dt);it.node.rotation.y=P.psi;}
   const tgt=T?T.node.localToWorld(new THREE.Vector3(0,1.45,0)):null;punchArm(it.g,pu.hand,Math.min(1,u),tgt);
-  if(!pu.hit&&u>=0.4){pu.hit=true;const H=punchTarget(P.x,P.z,P.psi,1.15);if(H){if(VICTIMS.includes(H))vicHit(H,P.psi,18+Math.random()*9);else pedHit(H,P.psi,18+Math.random()*9,'player');}}
+  if(!pu.hit&&u>=0.4){pu.hit=true;const H=punchTarget(P.x,P.z,P.psi,1.15);if(H&&H.nw){sndPunch(null);nwMeleeOut(H,P.psi,18+Math.random()*9);}else if(H){if(VICTIMS.includes(H))vicHit(H,P.psi,18+Math.random()*9);else pedHit(H,P.psi,18+Math.random()*9,'player');}}
   if(u>=1)ME.punch=null;}
 // a punch lands on someone
 function pedHit(p,psi,dmg,by){if(p.call)callStop(p);p.hp-=dmg;p.lastBy=by;const dx=Math.cos(psi),dz=-Math.sin(psi);sndPunch(p);pedAlarm(p.x,p.z,22,p);
@@ -17061,6 +17078,7 @@ function shoot(M,D,o){const W=o.W,player=o.by==='player';
   // through glass first, then whatever stopped it
   T.glass.forEach(g=>hitGlass(g,D,W));
   const h=T.hit;h.viaGlass=T.glass.some(g=>g.c.a&&h.c&&g.c.a===h.c.a||g.c.v&&h.c&&g.c.v===h.c.v);if(h.kind!=='none')impact(h,D,W,o);
+  if(NET.on)try{nwShotOut(M,D,W,h);}catch(e){console.warn('net shot',e);}
   // a near miss past your head
   if(!player&&!(h.kind==='person'&&h.tk==='me'))whizzPast(M,D,h.t);
   gunNoise(M.x,M.z,W.rifle?110:75,o.by==='player'?ME.it.pl:o.shooter);if(player){try{wPlayerShot();}catch(e){console.warn('wanted',e);}}try{alarmQueue();}catch(e){console.warn('alarm',e);}}
@@ -17104,7 +17122,9 @@ function staticNormal(h,D){const P=h.point;
 // people who can be hit: those on the street, owners you've thrown out, the clerk; you (by other people's bullets)
 function targets(o){const L=[];for(const p of PEDS)L.push({p,g:p.g,node:p.node,kind:'ped'});for(const V of VICTIMS)L.push({p:V,g:V.g,node:V.node,kind:'vic'});
   if(SHOP.clerk)L.push({p:SHOP.clerk,g:SHOP.clerk.g,node:SHOP.clerk.node,kind:'clerk'});if(o.player&&ME.it&&!ME.dead)L.push({p:ME,g:ME.it.g,node:ME.it.node,kind:'me'});
-  for(const p of SHOOTERS)if(!L.some(q=>q.p===p))L.push({p,g:p.g,node:p.node,kind:'ped'});return L;}
+  for(const p of SHOOTERS)if(!L.some(q=>q.p===p))L.push({p,g:p.g,node:p.node,kind:'ped'});
+  if(NET.on){for(const R of NW.rped.values())if(R.node&&R.g)L.push({p:R,g:R.g,node:R.node,kind:'np'});for(const R of NET.rem.values())if(R.node&&R.g&&R.node.visible)L.push({p:R,g:R.g,node:R.node,kind:'rp'});}
+  if(o&&o.onlyP)return L.filter(T=>T.p===o.onlyP);return L;}
 const SHOOTERS=[];
 function zonesOf(g){g.updateMatrixWorld(true);const N=g.userData.npc,J=N.joints,A=N.arms,Lg=N.legs,w=o=>o.getWorldPosition(_V());
   const head=w(J.head),neck=w(J.neck),spine=w(J.spine),hips=w(J.hips),up=neck.clone().sub(spine).normalize();
@@ -17123,8 +17143,15 @@ function tracePeople(O,D,far,o){let best=null;
     for(const z of zonesOf(T.g)){const t=rayCap(O,D,z[1],z[2],z[3]);if(t!=null&&t<far&&(!best||t<best.t)){best={t,kind:'person',who:p,tk:T.kind,zone:z[0],bone:z[4],A:z[1],B:z[2],g:T.g};}}}
   if(best)best.point=O.clone().addScaledVector(D,best.t);return best;}
 // the cars a ray passes through: your own and traffic
-function carList(o){const L=[];for(const a of TR.cars()){if(o&&o.skipCar===a)continue;if(!a.alive||!a.full||!a.root.visible||!a.full.visible||(a.alpha!=null&&a.alpha<0.5))continue;L.push({a,x:a.x,z:a.z,y:a.vy_!=null?a.vy_:(a.y||0),psi:a.psi,hl:a.halfLen,hw:(a.tpl&&a.tpl.wid)||a.halfWid+0.1});}
-  for(const v of CARS)if(v.alive&&v.node.visible&&v!==o.skipCar)L.push({v,x:v.ph.x,z:v.ph.z,y:v.vy_!=null?v.vy_:v.y,psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9});return L;}
+function carList(o){const L=[];
+  // a shot from another game at this car: it's hit wherever this game's camera is (seen or not)
+  if(o&&o.onlyA){const a=o.onlyA;return a.alive&&a.full?[{a,x:a.x,z:a.z,y:a.vy_!=null?a.vy_:(a.y||0),psi:a.psi,hl:a.halfLen,hw:(a.tpl&&a.tpl.wid)||a.halfWid+0.1}]:[];}
+  if(o&&o.onlyV){const v=o.onlyV;return v.alive!==false&&v.ph?[{v,x:v.ph.x,z:v.ph.z,y:v.vy_!=null?v.vy_:(v.y!=null?v.y:v.node.position.y),psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9}]:[];}
+for(const a of TR.cars()){if(o&&o.skipCar===a)continue;if(!a.alive||!a.full||!a.root.visible||!a.full.visible||(a.alpha!=null&&a.alpha<0.5))continue;L.push({a,x:a.x,z:a.z,y:a.vy_!=null?a.vy_:(a.y||0),psi:a.psi,hl:a.halfLen,hw:(a.tpl&&a.tpl.wid)||a.halfWid+0.1});}
+  for(const v of CARS)if(v.alive&&v.node.visible&&v!==o.skipCar)L.push({v,x:v.ph.x,z:v.ph.z,y:v.vy_!=null?v.vy_:v.y,psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9});
+  // online: the other players' cars
+  if(NET.on)for(const R of NET.rem.values()){const v=R.car;if(v&&v.node.visible&&v!==o.skipCar&&v.ph)L.push({v,x:v.ph.x,z:v.ph.z,y:v.node.position.y,psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9});}
+  if(o&&o.onlyP)return [];return L;}
 function carBoxT(c,O,D){const cp=Math.cos(c.psi),sp=Math.sin(c.psi),dx=O.x-c.x,dz=O.z-c.z;
   const of=dx*cp-dz*sp,ol=-dx*sp-dz*cp,df=D.x*cp-D.z*sp,dl=-D.x*sp-D.z*cp,oy=O.y-c.y,dy=D.y;let t0=0,t1=1e9;
   const slab=(o,d,lo,hi)=>{if(Math.abs(d)<1e-9){if(o<lo||o>hi)t0=1e9;return;}let a=(lo-o)/d,b=(hi-o)/d;if(a>b){const q=a;a=b;b=q;}t0=Math.max(t0,a);t1=Math.min(t1,b);};
@@ -17259,6 +17286,8 @@ function personShot(h,D,W,o){const T=h.who,zone=h.zone,dmg=W.dmg*(ZONE_MUL[zone]
   fxBlood(P,D,(W.rifle?1.4:1)*(zone==='head'?1.5:1));bloodOn(h,D);sndImpact('flesh',P);
   if(h.tk==='me'){playerShot(dmg,D,zone,o);return;}
   const byMe=o&&o.by==='player';
+  // online: someone in another player's game (or another player): their game takes the hit
+  if(h.tk==='np'||h.tk==='rp'){if(byMe)hitMark(false);return;}
   if(h.tk==='clerk'){const C=T;C.hp-=dmg;if(byMe)hitMark(C.hp<=0);if(C.hp<=0||zone==='head'){C.dead=true;C.mode='rag';C.rag=ragMake(C.g,C.node,D.clone().multiplyScalar(2.2).add(new THREE.Vector3(0,0.3,0)),new THREE.Vector3(Math.random()-0.5,0,Math.random()-0.5).multiplyScalar(3),null);C.rag.lieFor=1e9;bloodPool(C);}
     else{C.hurt={t:0};C.cower=true;C.cowerUntil=performance.now()/1000+15;}return;}
   if(h.tk==='vic'){const V=T;if(V.dead&&V.rag){ragPush(V.rag,h,D,W);return;}V.hp=(V.hp==null?100:V.hp)-dmg;if(byMe)hitMark(V.hp<=0);
@@ -17767,7 +17796,8 @@ function melStep(dt){const it=ME.it,P=it.pl,pu=ME.punch,W=MELEE[pu.mel];const u=
   melArm(it.g,Math.min(1,u),W,T?T.node.localToWorld(new THREE.Vector3(0,1.3,0)):null);
   if(!pu.hit&&u>=0.45){pu.hit=true;const H=punchTarget(P.x,P.z,P.psi,W.reach);
     if(H){const dmg=W.dmg*(0.85+Math.random()*0.3),dx=Math.cos(P.psi),dz=-Math.sin(P.psi);sndMelHit(W,H);
-      if(VICTIMS.includes(H)){vicHit(H,P.psi,dmg);}
+      if(H.nw){nwMeleeOut(H,P.psi,dmg);}
+      else if(VICTIMS.includes(H)){vicHit(H,P.psi,dmg);}
       else{pedHit(H,P.psi,dmg,'player');
         // a good hit puts them down (pedHit only floors the badly hurt)
         if(!H.dead&&H.mode!=='rag'&&H.hp>0&&Math.random()<W.kd)pedRag(H,new THREE.Vector3(dx*(2.6+Math.random()),0.8,dz*(2.6+Math.random())),new THREE.Vector3(-dz,0,dx).multiplyScalar(-3),false);}}}
@@ -18138,7 +18168,7 @@ function netRoom(code,listenOnly){const base=NET_V+code+'/p/',wb=NET_V+code+'/w/
   const send=()=>{if(listenOnly)return;seq++;lastPub=Date.now();const pl=_TE.encode(JSON.stringify({q:seq,s:sess,t:Date.now(),p:mine}));conns.forEach(C=>C.pub(myT,pl,true));};
   const room={me,
     set(p){mine=p;send();},
-    world(o){if(listenOnly)return;o.q=++wq;o.s=sess;const pl=_TE.encode(JSON.stringify(o));conns.forEach(C=>C.pub(wb+me,pl,false));},
+    world(o){if(listenOnly)return;o.q=++wq;o.s=sess;const pl=_TE.encode(JSON.stringify(o));NW.txB=pl.length;conns.forEach(C=>{if(!C.pub(wb+me,pl,false))NW.txFail=(NW.txFail||0)+1;});},
     onWorld(f){wsubs.push(f);},
     onPeers(f){subs.push(f);},
     peers(){return Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr}));},
@@ -18234,7 +18264,7 @@ async function netStart(){if(!NET.want||NET.on)return;NET.want=false;NET.on=true
   // the server's rules: medium traffic for everyone (the player's own setting comes back when they leave)
   NET.dens0=CFG.play.density;CFG.play.density=50;
   try{NET.room=await netRoom(NET_SERVERS[0].id,false);}catch(e){console.log('online: could not join',e&&(e.stack||e.message||JSON.stringify(e)));NET.on=false;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}toast('Could not reach the server: playing offline');return;}
-  NET.jt=Date.now();NET.me=NET.room.me;NET.room.onPeers(L=>{NET.peers=L;});if(NET.room.onWorld)NET.room.onWorld(nwRecv);netHud();toast('Online: '+NET_SERVERS[0].name+(NET.acct?' · logged in as '+NET.acct.user:''));}
+  NET.jt=Date.now();try{nwBgSetup();}catch(e){}NET.me=NET.room.me;NET.room.onPeers(L=>{NET.peers=L;});if(NET.room.onWorld)NET.room.onWorld(nwRecv);netHud();toast('Online: '+NET_SERVERS[0].name+(NET.acct?' · logged in as '+NET.acct.user:''));}
 function netStop(){if(!NET.on)return;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}if(NET.acct&&NET.dirty)acctPush();if(NET.room)NET.room.leave();NET.room=null;NET.on=false;NET.ride=null;try{nwClear();}catch(e){}
   for(const R of NET.rem.values())netRemDrop(R);NET.rem.clear();try{CYC.last=null;todName='';if(STARS)STARS.material.opacity=1;applyPlay();}catch(e){}const h=g$('gnet');if(h)h.remove();if(NET.tags){NET.tags.remove();NET.tags=null;}}
 // what I tell the others
@@ -18371,7 +18401,7 @@ function netStep(dt){if(!NET.on){if(NET.want&&ME.it)netStart();return;}if(!NET.r
    a chase belongs to the game of the player being chased. The parked cars along the streets come from the same
    numbers in every game, and one that someone takes is gone for everybody.
    ===================================================================== */
-const NW={rtr:new Map(),rped:new Map(),rpc:new Map(),sendT:0,pkGone:new Set(),pkOther:new Set(),host:true,hostId:null,eb:null,cops:[],xT:0};
+const NW={vid:0,rtr:new Map(),rped:new Map(),rpc:new Map(),sendT:0,pkGone:new Set(),pkOther:new Set(),host:true,hostId:null,eb:null,cops:[],xT:0};
 const _w1=v=>Math.round(v*10)/10,_w2=v=>Math.round(v*100)/100;
 // distance from a point to the nearest other player (1e9 offline)
 function nwNear(x,z,O){let d=1e9;for(const s of O)d=Math.min(d,Math.hypot(x-s[0],z-s[1]));return d;}
@@ -18389,11 +18419,13 @@ function nwPack(){const O=nwOthers();if(!O.length)return null;const tr=[],cp=[],
   for(const a of TR.cars()){if(!a.alive||a.remote||!a.tpl||!a.tpl.key||a.parkSpot!=null)continue;const d=nwNear(a.x,a.z,O);
     const sp=_w1(a.sim==='kin'?(a.vk||0):(a.u||0)),base=[a.id,a.tpl.key,'',_w1(a.x),_w2(a.y||0),_w1(a.z),_w2(a.psi),sp,0,_w2(a.gy||0)];
     if(a.unit){if(a.unit.st==='parked'||d>420)continue;const P=a.pd;base[2]=a.unitText||'';
-      base[8]=(P&&P.lights?1:0)|(P&&P.lights&&P.siren&&P.role!=='dead'&&P.role!=='hold'?2:0)|(a.in&&a.in.brk>0.3?4:0)|(a.burnt?16:0)|(a.hazard?32:0);cp.push([d,base]);continue;}
-    if(d>330||a.fade<=0)continue;base[2]=a.paintHex||'';
+      base[8]=(P&&P.lights?1:0)|(P&&P.lights&&P.siren&&P.role!=='dead'&&P.role!=='hold'?2:0)|(a.in&&a.in.brk>0.3?4:0)|(a.burnt?16:0)|(a.hazard?32:0)|(!a.cops||!a.cops.length||a.unit.out?64:0);cp.push([d,base]);continue;}
+    if(d>330||a.fade<=0)continue;base[2]=a.paintHex||'';if(a.driver&&a.drvI!=null)base[10]=[a.drvI,a.rideI||[]];
     base[8]=(a.sigL?1:0)|(a.sigR?2:0)|(a.hazard?4:0)|(a.in&&a.in.brk>0.3?8:0)|(a.burnt?16:0)|(a.parked?64:0);tr.push([d,base]);}
   for(const p of PEDS){const d=nwNear(p.x,p.z,O);if(d>220)continue;
     pd.push([d,[p.id,p.cop?(p.k|0):p.ri,_w1(p.x),_w2(p.y),_w1(p.z),_w2(p.psi),_w2(p.mode==='rag'?0:(npcState(p.g).v||0)),(p.dead?1:0)|(p.mode==='rag'?2:0)|(p.cop?4:0)|(p.mode==='cower'||p.mode==='handsup'?8:0)]]);}
+  for(const V of VICTIMS){if(V.mode==='seat'||!V.node)continue;const w=V.node.getWorldPosition(V3());const d=nwNear(w.x,w.z,O);if(d>220)continue;if(!V.nwid)V.nwid='v'+(++NW.vid);
+    pd.push([d,[V.nwid,V.ri|0,_w1(w.x),_w2(w.y),_w1(w.z),_w2(V.node.rotation.y),_w2(V.mode==='run'?1.6:0),(V.dead?1:0)|(V.rag||V.mode==='rag'?2:0)]]);}
   const by=(L,n)=>L.sort((p,q)=>p[0]-q[0]).slice(0,n).map(q=>q[1]);
   const o={tr:by(tr,36),cp:by(cp,12),pd:by(pd,36)};
   // the host keeps the station: which bays are empty (their cars are out), so the others don't show a car there
@@ -18401,7 +18433,7 @@ function nwPack(){const O=nwOthers();if(!O.length)return null;const tr=[],cp=[],
   return o;}
 
 /* ---- what the others send ---- */
-function nwRecv(id,d){const now=performance.now();
+function nwRecv(id,d){const now=performance.now();NW.rx=(NW.rx||0)+1;NW.lastD=d;NW.lastId=id;if(Array.isArray(d.ev)){nwEvents(id,d.ev);return;}
   const put=(map,key,e,s,mk)=>{let R=map.get(key);if(!R){R=mk();map.set(key,R);}const pv=R.buf[R.buf.length-1];
     if(!pv||pv.s[0]!==s[0]||pv.s[2]!==s[2]||pv.s[3]!==s[3]){R.buf.push({t:now,s});if(R.buf.length>12)R.buf.shift();}R.e=e;R.seen=now;R.from=id;};
   (Array.isArray(d.tr)?d.tr:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=10)put(NW.rtr,id+':'+e[0],e,[e[3],e[4],e[5],e[6],e[7],e[9]],()=>({buf:[],a:null,cop:false}));});
@@ -18425,21 +18457,24 @@ function nwFrame(dt){const now=performance.now();
     for(const a of TR.cars().slice()){if(!a.alive||a.remote||a.unit||a.parkSpot!=null||a.parked)continue;if(Math.hypot(a.x-pr.x,a.z-pr.z)<420&&!TR.seen(a.x,a.z,3))TR.remove(a);}
     for(const q of PEDS.slice()){if(q.cop||q.call||q.dead)continue;if(Math.hypot(q.x-pr.x,q.z-pr.z)<260&&!TR.seen(q.x,q.z,1.5))pedRemove(q);}}
   // where the others are, for the traffic and the people
-  const O=[];for(const p of NET.peers){const pr=p.pr;if(pr&&typeof pr.x==='number')O.push([pr.x,pr.z]);}window.BAY_NETP=O;
+  const O=[];for(const p of NET.peers){const pr=p.pr;if(pr&&typeof pr.x==='number')O.push([pr.x,pr.z]);}window.BAY_NETP=O;window.BAY_NETN=1+NET.peers.length;
+  try{nwBumps();}catch(x){console.warn('bumps',x);}
   // parked cars someone else has taken
   NW.pkOther.clear();for(const p of NET.peers){const L=p.pr&&p.pr.pk;if(Array.isArray(L))L.forEach(i=>NW.pkOther.add(i|0));}
   // the cars: traffic and police
   const cops=[];
   for(const [key,R] of NW.rtr){if(now-R.seen>1500){if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.delete(key);continue;}
     const e=R.e,s=nwSample(R.buf,now);if(!s)continue;
-    if(!R.a||!R.a.alive){if(R.bad)continue;R.a=TR.remoteCar.make(e[1],R.cop?null:e[2],s[0],s[1],s[2],s[3],R.cop?e[2]:null);if(!R.a){R.bad=true;continue;}}
-    const a=R.a,fl=e[8]|0;a.x=s[0];a.y=s[1];a.z=s[2];a.psi=s[3];a.u=s[4];a.vk=Math.abs(s[4]);a.v=0;a.yr=0;a.gy=s[5]||0;a.omega=a.u/(a.r||0.33);a.omegaF=a.omega;a.alpha=1;a.fade=1;
+    if(R.gone)continue;
+    if(!R.a||!R.a.alive){if(R.bad)continue;R.a=TR.remoteCar.make(e[1],R.cop?null:e[2],s[0],s[1],s[2],s[3],R.cop?e[2]:null,R.cop?null:e[10]);if(!R.a){R.bad=true;continue;}R.a.nwR=R;R.last=null;}
+    const a=R.a,fl=e[8]|0;try{nwPuppetPush(R,a);}catch(x){}a.x=s[0];a.y=s[1];a.z=s[2];a.psi=s[3];a.u=s[4];a.vk=Math.abs(s[4]);a.v=0;a.yr=0;a.gy=s[5]||0;a.omega=a.u/(a.r||0.33);a.omegaF=a.omega;a.alpha=1;a.fade=1;
     const brk=R.cop?(fl&4):(fl&8);a.in.brk=brk?1:0;a.brk=a.in.brk;a.in.thr=brk?0:0.3;
-    if(R.cop){a.netL=!!(fl&1);a.netS=!!(fl&2);a.hazard=!!(fl&32);cops.push(a);}else{a.sigL=!!(fl&1);a.sigR=!!(fl&2);a.hazard=!!(fl&4);}
-    if((fl&16)&&!a.burnt)a.burnt=true;}
+    if(R.cop){a.netL=!!(fl&1);a.netS=!!(fl&2);a.hazard=!!(fl&32);cops.push(a);const crew=!(fl&64);if(crew!==!!a.cops)TR.remoteCar.crew(a,crew);}else{a.sigL=!!(fl&1);a.sigR=!!(fl&2);a.hazard=!!(fl&4);}
+    if((fl&16)&&!a.burnt)a.burnt=true;R.last={psi:a.psi,u:a.u};}
   NW.cops=cops;window.BAY_NETCOPS=cops;
   // the station: the host's empty bays have no car here either
   {const eb=NW.host?null:NW.eb;const S=TR.pd.station();for(const u of TR.pd.units()){const bi=S&&u.bay?S.bays.indexOf(u.bay):-1;u.a.netHide=!!(eb&&u.st==='parked'&&bi>=0&&eb.includes(bi));}}
+  for(const u of TR.pd.units()){if(!u.adopted||u.a.pd||!u.a.alive){if(u.adopted)u.relT=0;continue;}u.relT=(u.relT||0)+dt;if(u.relT>8&&!TR.seen(u.a.x,u.a.z,3))TR.pd.replace(u);}
   // the people
   const cp=camera.position;
   for(const [key,R] of NW.rped){if(now-R.seen>1500){nwPedDrop(R);NW.rped.delete(key);continue;}
@@ -18460,15 +18495,126 @@ function nwFrame(dt){const now=performance.now();
   // the cars traffic has to see: the others' cars too
   NW.xT-=dt;if(NW.xT<=0){NW.xT=0.5;try{refreshExtra();}catch(x){}}
   // and mine, to them
-  NW.sendT-=dt;if(NW.sendT<=0){NW.sendT=0.2;const o=nwPack();if(o&&NET.room&&NET.room.world)NET.room.world(o);}}
+  NW.sendT-=dt;if(NW.sendT<=0){NW.sendT=0.2;const o=nwPack();NW.packN=(NW.packN||0)+1;if(o&&NET.room&&NET.room.world){NW.tx=(NW.tx||0)+1;NW.txTr=o.tr.length;NET.room.world(o);}}}
 function nwPedDrop(R){if(R.node)scene.remove(R.node);if(R.g){R.g.position.set(0,0,0);R.g.rotation.set(0,0,0);}R.node=null;R.g=null;R.down=false;}
 function nwClear(){for(const R of NW.rtr.values())if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.clear();for(const R of NW.rped.values())nwPedDrop(R);NW.rped.clear();
-  for(const R of NW.rpc.values())scene.remove(R.v.node);NW.rpc.clear();NW.cops=[];window.BAY_NETCOPS=[];window.BAY_NETP=null;window.BAY_NETPATROL=undefined;NW.eb=null;NW.known=null;NW.pkOther.clear();
+  for(const R of NW.rpc.values())scene.remove(R.v.node);NW.rpc.clear();NW.cops=[];window.BAY_NETCOPS=[];window.BAY_NETP=null;window.BAY_NETN=0;window.BAY_NETPATROL=undefined;NW.eb=null;NW.known=null;NW.pkOther.clear();
   try{for(const u of TR.pd.units())u.a.netHide=false;}catch(e){}try{refreshExtra();}catch(e){}}
 // my own cars standing about (not the one I'm driving), for the others
 function nwParkedMine(){const O=nwOthers();if(!O.length)return null;const L=[];
   for(const v of CARS){if(!v.alive||v===DRIVE||!v.ph||v.remote)continue;if(nwNear(v.ph.x,v.ph.z,O)>300)continue;L.push([v.key,v.color,_w1(v.ph.x),_w2(v.node.position.y),_w1(v.ph.z),_w2(v.ph.psi)]);if(L.length>=6)break;}
   return L.length?L:null;}
+
+/* =====================================================================
+   WHAT HAPPENS TO THINGS: a shot, a dent, a knock, a punch, a car taken, a police car handed over. Each is sent to
+   everyone at once on the world channel; the game the thing belongs to does what it would do had it happened there
+   (the driver shot, the car pushed, the person knocked down), and the others show it on their copy.
+   ===================================================================== */
+const _nwW={};function nwWid(W){for(const k in WPN)if(WPN[k]===W)return k;return null;}
+function nwEvent(e){if(!NET.room||!NET.room.world)return;NET.room.world({ev:[e]});}
+const _r3=v=>Math.round(v*1000)/1000;
+// local to an object's frame and back (a point, a direction)
+function nwLoc(node,P,D){node.updateMatrixWorld(true);const inv=new THREE.Matrix4().copy(node.matrixWorld).invert();const p=P.clone().applyMatrix4(inv),d=D.clone().transformDirection(inv);return [p.toArray().map(_r3),d.toArray().map(_r3)];}
+// what a shot hit, as everyone can find it: a car or a person in some game (theirs or mine), or a player
+function nwTarget(h){if(!h)return null;
+  if((h.kind==='car'||h.kind==='occupant')&&h.c){const c=h.c;
+    if(c.a){const a=c.a;if(a.remote){const R=a.nwR;return R?{t:'a',o:R.from,id:R.e[0],c:R.cop?1:0,node:a.root}:null;}return {t:'a',o:NET.me,id:a.id,c:a.unit?1:0,node:a.root};}
+    if(c.v){const v=c.v;if(v.remote&&NET.rem.has(v.remote))return {t:'v',o:v.remote,node:v.node};if(v===DRIVE)return {t:'v',o:NET.me,node:v.node};return null;}}
+  if(h.kind==='person'){const p=h.who;if(h.tk==='np')return {t:'p',o:p.from,id:p.e[0],node:p.node};if(h.tk==='rp')return {t:'pl',o:p.id,node:p.node};
+    if(h.tk==='ped')return {t:'p',o:NET.me,id:p.id,node:p.node};}
+  return null;}
+function nwShotOut(M,D,W,h){const w=nwWid(W);if(!w)return;const e={k:'s',M:[M.x,M.y,M.z].map(_r3),D:[D.x,D.y,D.z].map(_r3),w};
+  const T=h&&h.kind!=='none'&&h.point?nwTarget(h):null;if(T){const [lp,ld]=nwLoc(T.node,h.point,D);e.tg={t:T.t,o:T.o,id:T.id,c:T.c,lp,ld};}nwEvent(e);}
+// the thing a shot was aimed at, in this game: mine (the real one) or a copy of someone else's
+function nwEnt(tg){const mine=tg.o===NET.me;
+  if(tg.t==='a'){let a=null;if(mine)a=TR.byId(tg.id);else{const R=NW.rtr.get(tg.o+':'+(tg.c?'c':'')+tg.id);a=R&&R.a;}return a&&a.alive?{node:a.root,o:{onlyA:a},mine}:null;}
+  if(tg.t==='v'){const v=mine?DRIVE:(NET.rem.get(tg.o)||{}).car;return v?{node:v.node,o:{onlyV:v},mine}:null;}
+  if(tg.t==='p'){if(mine){const p=PEDS.find(q=>q.id===tg.id);return p?{node:p.node,o:{onlyP:p},mine}:null;}const R=NW.rped.get(tg.o+':'+tg.id);return R&&R.node?{node:R.node,o:{onlyP:R},mine}:null;}
+  if(tg.t==='pl'){if(mine)return ME.it&&!ME.dead?{node:ME.it.node,o:{onlyP:ME,player:true},mine}:null;const R=NET.rem.get(tg.o);return R&&R.node?{node:R.node,o:{onlyP:R},mine}:null;}
+  return null;}
+function nwShotIn(from,e){const W=WPN[e.w];if(!W||!Array.isArray(e.M)||!Array.isArray(e.D))return;const M=new THREE.Vector3(...e.M),D=new THREE.Vector3(...e.D).normalize();
+  const R=NET.rem.get(from),cp=camera.position;
+  if(cp.distanceTo(M)<400){try{fxFlash(M,D,W,null);}catch(x){}try{sndShot(M,W,false);}catch(x){}}
+  const o={by:'net',shooter:{x:M.x,z:M.z},player:true,skipCar:R&&R.car||undefined};
+  let h=null,glass=[];
+  if(e.tg){const E=nwEnt(e.tg);
+    if(E){E.node.updateMatrixWorld(true);const P=new THREE.Vector3(...e.tg.lp).applyMatrix4(E.node.matrixWorld),D2=new THREE.Vector3(...e.tg.ld).transformDirection(E.node.matrixWorld).normalize(),O=P.clone().addScaledVector(D2,-2.5);
+      const oo=Object.assign({},o,E.o),cr=traceCars(O,D2,5,oo),pr=tracePeople(O,D2,5,oo);h=cr.hit;if(pr&&(!h||pr.t<h.t))h=pr;glass=cr.glass.filter(g=>!h||g.t<h.t);
+      glass.forEach(g=>{try{hitGlass(g,D2,W);}catch(x){}});if(h){h.viaGlass=glass.length>0;try{impact(h,D2,W,o);}catch(x){console.warn('net hit',x);}}}}
+  else{const T=traceAll(M,D,300,o);T.glass.forEach(g=>{try{hitGlass(g,D,W);}catch(x){}});h=T.hit;if(h.kind!=='none'){h.viaGlass=T.glass.length>0;try{impact(h,D,W,o);}catch(x){console.warn('net hit',x);}}
+    try{if(!(h.kind==='person'&&h.tk==='me'))whizzPast(M,D,h.t);}catch(x){}}
+  try{gunNoise(M.x,M.z,W.rifle?110:75,{x:M.x,z:M.z});}catch(x){}}
+
+/* ---- dents: a car of mine took a knock (everyone's copy takes the same one) ---- */
+const nwL2=(psi,x,z)=>{const c=Math.cos(psi),s=Math.sin(psi);return [x*c-z*s,-x*s-z*c];};   // world -> (forward, left) and back (it is its own inverse)
+function nwDentOut(a,dvx,dvz,mag){if(!nwOthers().length)return;const [f,l]=nwL2(a.psi,dvx,dvz);nwEvent({k:'d',id:a.id,c:a.unit?1:0,f:_r3(f),l:_r3(l),m:_r3(mag)});}
+function nwVehDentOut(v,dvx,dvz,mag,at){if(!nwOthers().length)return;const ph=v.ph,[f,l]=nwL2(ph.psi,dvx,dvz),e={k:'dv',f:_r3(f),l:_r3(l),m:_r3(mag)};
+  if(at){const [px,pz]=nwL2(ph.psi,at.x-ph.x,at.z-ph.z),[ux,uz]=nwL2(ph.psi,at.ux,at.uz);e.at=[px,pz,ux,uz].map(_r3);}nwEvent(e);}
+function nwDentIn(from,e){const [dvxf,dvzf]=[e.f,e.l];
+  if(e.k==='d'){const R=NW.rtr.get(from+':'+(e.c?'c':'')+e.id),a=R&&R.a;if(!a||!a.alive)return;const [dvx,dvz]=nwL2(a.psi,dvxf,dvzf);
+    const D=trafficDmg(a);Object.assign(D.ph,{x:a.x,z:a.z,psi:a.psi,u:a.u||0,v:0});D.y=a.vy_!=null?a.vy_:(a.y||0);a.root.updateMatrixWorld(true);hitVehicle(D,dvx,dvz,e.m);
+    if(e.m>2.5&&camera.position.distanceTo(a.root.position)<45)try{sndCrunch(e.m);}catch(x){}return;}
+  const v=(NET.rem.get(from)||{}).car;if(!v||!v.ph)return;const ph=v.ph,[dvx,dvz]=nwL2(ph.psi,dvxf,dvzf);let at;
+  if(Array.isArray(e.at)){const [px,pz]=nwL2(ph.psi,e.at[0],e.at[1]),[ux,uz]=nwL2(ph.psi,e.at[2],e.at[3]);at={x:ph.x+px,z:ph.z+pz,ux,uz};}
+  v.node.updateMatrixWorld(true);hitVehicle(v,dvx,dvz,e.m,at);if(e.m>2.5&&camera.position.distanceTo(v.node.position)<45)try{sndCrunch(e.m);}catch(x){}}
+
+/* ---- knocks: I drove into one of theirs (their car, or their traffic): their game takes the push ---- */
+function nwBumpIn(from,e){const dv=nwL2(0,0,0);
+  if(e.t==='a'){const a=TR.byId(e.id);if(!a)return;TR.push(a,e.x,e.z);if(Math.hypot(e.x,e.z)>5&&!a.unit)TR.stopCar(a);return;}
+  if(e.t==='v'&&DRIVE){const ph=DRIVE.ph,c=Math.cos(ph.psi),s=Math.sin(ph.psi),vx=ph.u*c-ph.v*s+e.x,vz=-ph.u*s-ph.v*c+e.z;ph.u=vx*c-vz*s;ph.v=-vx*s-vz*c;
+    const m=Math.hypot(e.x,e.z);if(m>0.8)try{hitVehicle(DRIVE,e.x,e.z,m,e.at?{x:ph.x+e.at[0],z:ph.z+e.at[1],ux:e.at[2],uz:e.at[3]}:undefined);nwVehDentOut(DRIVE,e.x,e.z,m);}catch(x){}
+    if(m>2.5)try{ph.crash=Math.max(ph.crash||0,Math.min(1,m/14));sndCrunch(m);}catch(x){}}}
+// each frame: did my driving push one of their cars (or a copy of their traffic)? the push goes to them
+function nwBumps(){if(!DRIVE)return;const me=DRIVE.ph;
+  // the other players' cars: they and I collide
+  for(const R of NET.rem.values()){const v=R.car;if(!v||!v.ph||!R.pr||!R.pr.c)continue;const o=v.ph;if(Math.abs(o.x-me.x)>9||Math.abs(o.z-me.z)>9)continue;
+    const c0=Math.cos(o.psi),s0=Math.sin(o.psi),ox=o.u*c0-(o.v||0)*s0,oz=-o.u*s0-(o.v||0)*c0;
+    const mc=Math.cos(me.psi),ms=Math.sin(me.psi),mx=me.u*mc-me.v*ms,mz=-me.u*ms-me.v*mc;let imp=0;try{imp=TR.pair(me,o);}catch(x){}if(!(imp>0))continue;
+    const c1=Math.cos(o.psi),s1=Math.sin(o.psi),dx=(o.u*c1-(o.v||0)*s1)-ox,dz=(-o.u*s1-(o.v||0)*c1)-oz,m=Math.hypot(dx,dz);
+    const mx2=me.u*mc-me.v*ms,mz2=-me.u*ms-me.v*mc,dmx=mx2-mx,dmz=mz2-mz,mm=Math.hypot(dmx,dmz);
+    if(mm>0.8)try{hitVehicle(DRIVE,dmx,dmz,mm);nwVehDentOut(DRIVE,dmx,dmz,mm);if(mm>2.5){me.crash=Math.max(me.crash||0,Math.min(1,mm/14));sndCrunch(mm);}}catch(x){}
+    if(m>0.3&&(!R.bumpT||performance.now()-R.bumpT>150)){R.bumpT=performance.now();nwEvent({k:'b',t:'v',o:R.id,x:_r3(dx),z:_r3(dz)});}}}
+// the copies of their traffic: a push my game gave one (it isn't where their game put it any more) goes to them
+function nwPuppetPush(R,a){const L=R.last;if(!L)return;const c=Math.cos(L.psi),s=Math.sin(L.psi),vx0=L.u*c,vz0=-L.u*s,c1=Math.cos(a.psi),s1=Math.sin(a.psi),vx=a.u*c1-(a.v||0)*s1,vz=-a.u*s1-(a.v||0)*c1,dx=vx-vx0,dz=vz-vz0,m=Math.hypot(dx,dz);
+  if(m>1.0&&(!R.bumpT||performance.now()-R.bumpT>200)){R.bumpT=performance.now();nwEvent({k:'b',t:'a',o:R.from,id:R.e[0],x:_r3(dx),z:_r3(dz)});}}
+
+/* ---- a car of theirs I took: their game lets it go (it's mine now, and the people I pulled out are mine) ---- */
+function nwTookPuppet(a){const R=a.nwR;if(!R)return;R.gone=true;R.a=null;nwEvent({k:'j',o:R.from,id:R.e[0]});}
+function nwTookIn(e){const a=TR.byId(e.id);if(a&&!a.unit)TR.remove(a);}
+
+/* ---- punches (and the bat, the crowbar, the knife) on someone in another game, or on another player ---- */
+function nwPunchables(){const L=[];for(const R of NW.rped.values()){if(!R.node||R.down)continue;L.push({x:R.x,z:R.z,node:R.node,nw:{t:'p',o:R.from,id:R.e[0]}});}
+  for(const R of NET.rem.values()){if(!R.node||!R.node.visible||!R.pr||R.pr.c||R.pr.sit||R.pr.d)continue;L.push({x:R.node.position.x,z:R.node.position.z,node:R.node,nw:{t:'pl',o:R.id}});}return L;}
+function nwMeleeOut(H,psi,dmg){const P=ME.it.pl;hitMark(false);nwEvent({k:'m',t:H.nw.t,o:H.nw.o,id:H.nw.id,psi:_r3(psi),dmg:Math.round(dmg),ax:_w1(P.x),az:_w1(P.z)});}
+function nwMeleeIn(e){
+  if(e.t==='pl'){if(ME.dead||ME.car)return;const dx=Math.cos(e.psi),dz=-Math.sin(e.psi);try{sndPunch(null);playerHurt(e.dmg,dx,dz);}catch(x){}
+    if(e.dmg>30&&!ME.rag)try{knockDown({spd:4,vx:dx*3,vz:dz*3});}catch(x){}return;}
+  const p=PEDS.find(q=>q.id===e.id);if(!p||p.dead)return;try{pedHit(p,e.psi,e.dmg,'net');}catch(x){console.warn(x);}if(p.mode==='fight')pedFlee(p,e.ax,e.az,0);}
+
+/* ---- police cars: another game's patrol car that sees me (or is nearest when I'm wanted) becomes my game's ---- */
+function nwPatrolsNear(x,z,r){return (window.BAY_NETCOPS||[]).filter(a=>a.alive&&a.nwR&&!a.nwR.gone&&!a.netL&&Math.hypot(a.x-x,a.z-z)<r).sort((p,q)=>Math.hypot(p.x-x,p.z-z)-Math.hypot(q.x-x,q.z-z));}
+function nwAdopt(a){const R=a&&a.nwR;if(!R||R.gone||a.netL)return null;const u=TR.pd.adopt(R.e[1],a.x,a.y||0,a.z,a.psi,R.e[2]||null);if(!u)return null;
+  try{TR.pd.phys(u.a);u.a.u=a.u||0;}catch(x){}R.gone=true;TR.remove(a);R.a=null;nwEvent({k:'g',o:R.from,id:R.e[0]});return u;}
+function nwGiveIn(e){try{TR.pd.give(e.id);}catch(x){console.warn('give',x);}}
+
+/* ---- what arrives ---- */
+function nwEvents(from,L){for(const e of L){if(!e||typeof e!=='object')continue;try{
+  if(e.k==='s')nwShotIn(from,e);
+  else if(e.k==='d'||e.k==='dv')nwDentIn(from,e);
+  else if(e.o!==NET.me)continue;
+  else if(e.k==='b')nwBumpIn(from,e);
+  else if(e.k==='j')nwTookIn(e);
+  else if(e.k==='m')nwMeleeIn(e);
+  else if(e.k==='g')nwGiveIn(e);}catch(x){console.warn('net event',e.k,x);}}}
+
+/* ---- online, the game keeps going in a background tab (browsers stop animation frames there; a worker keeps time),
+   so the others still see this player's traffic and people moving ---- */
+let NW_BG=null;
+function nwBgSetup(){if(NW_BG!==null)return;NW_BG=false;
+  try{const src='let t=null;onmessage=e=>{clearInterval(t);t=null;if(e.data>0)t=setInterval(()=>postMessage(0),e.data);};';
+    NW_BG=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));let last=performance.now();
+    NW_BG.onmessage=()=>{const now=performance.now(),dt=Math.min(0.1,(now-last)/1000);last=now;if(document.hidden&&NET.on&&MODE==='play')try{step(dt);}catch(e){}};}catch(e){NW_BG=false;}
+  document.addEventListener('visibilitychange',()=>{if(NW_BG)NW_BG.postMessage(document.hidden&&NET.on?50:0);});}
 
 /* ===========================================================================
    THE MAP AND GPS. M opens the full map (the game pauses): drag to move, scroll to zoom, click a spot to set a
@@ -18677,7 +18823,9 @@ const W_CRIME={steal:{lvl:1,name:'a vehicle theft',see:30,hear:0},carjack:{lvl:1
 // what the police can see from where they are: each unit with officers in it, each officer on foot
 function wEyesList(){const L=[];for(const u of TR.pd.units()){const a=u.a;if(!a.alive||u.out||!a.cops||!a.cops.length||u.foot)continue;if(u.st==='parked'&&!a.pd)continue;
     L.push({x:a.x,z:a.z,psi:a.psi,car:true,u,key:'u'+u.id});}
-  for(const p of WCOPS)if(!p.dead&&p.mode!=='rag')L.push({x:p.x,z:p.z,psi:p.psi,car:false,u:p.unit,p,key:'p'+p.id});return L;}
+  for(const p of WCOPS)if(!p.dead&&p.mode!=='rag')L.push({x:p.x,z:p.z,psi:p.psi,car:false,u:p.unit,p,key:'p'+p.id});
+  // online: the other games' police cars see you too (a patrol car that does is handed over to this game, see wPursuit)
+  for(const a of (window.BAY_NETCOPS||[]))if(a.alive&&a.nwR&&!a.nwR.gone)L.push({x:a.x,z:a.z,psi:a.psi,car:true,u:null,net:a,key:'n'+a.id});return L;}
 function wCanSee(e,x,z,range,trk){const dx=x-e.x,dz=z-e.z,d=Math.hypot(dx,dz);if(d>range)return -1;
   if(d>9&&!(trk&&e.car)){const a=Math.abs(wrapA(Math.atan2(-dz,dx)-e.psi));if(a>(e.car?2.1:1.75))return -1;}
   return wLOSc(e.key,e.x,e.z,x,z)?d:-1;}
@@ -18720,7 +18868,7 @@ function wReport(c){const fresh=WANT.stars===0;
 function wSeen(lvl,type,ev,eye){const was=WANT.stars;WANT.stars=Math.max(WANT.stars,lvl);WANT.evid.desc=WANT.evid.desc||!!ev.desc;if(ev.veh)WANT.evid.veh=ev.veh;
   wPursuit(eye);if(was===0){const u=eye&&eye.u;const me=wMe();wRadio('seen','disp','All units, '+(u?u.id.replace('B','Bravo '):'a unit')+' reports '+(type==='aimCop'?'the suspect is armed and has a weapon on an officer':type==='copAssault'?'an officer assaulted':W_CRIME[type].name+' in front of officers')+', in pursuit'+(me.car?' of a '+wCarText(me.car):' on foot')+' on '+wRoad(me.x,me.z)+'.',3);}}
 function wPursuit(eye){const me=wMe();const was=WANT.state;WANT.state='pursuit';WANT.lostT=0;WANT.seenT=0;WANT.clearT=0;WANT.lkp={x:me.x,z:me.z,t:WANT.t};WANT.hot={x:me.x,z:me.z,r:W_HOT[WANT.stars]};WANT.hotK=1;WANT.evadeT=0;
-  if(was!=='pursuit'){if(eye&&eye.u&&!eye.u.a.pd)pdTake(eye.u);wDispatch(W_MIN[WANT.stars],true);
+  if(was!=='pursuit'){if(eye&&eye.u&&!eye.u.a.pd)pdTake(eye.u);else if(eye&&eye.net){try{const u=nwAdopt(eye.net);if(u)pdTake(u);}catch(e){console.warn('adopt',e);}}wDispatch(W_MIN[WANT.stars],true);
     if(was==='search'||was==='evade'){const u=eye&&eye.u;wRadio('reacq','disp','Officers have reacquired visual on the suspect, '+wRoad(me.x,me.z)+'.',6);}}}
 // an officer just recognised / sees the player: what they now know
 function wLearn(e,d){const me=wMe();if(me.car&&(WANT.state==='pursuit'||d<60))WANT.evid.veh=me.car;if(me.foot&&d<45||d<16)WANT.evid.desc=true;}
@@ -18740,7 +18888,7 @@ function wEyes(){const me=wMe();if(!me)return;const L=wEyesList();let best=null,
   WANT.saw=true;wLearn(best,bd);WANT.lkp={x:me.x,z:me.z,t:WANT.t,vx:me.vx,vz:me.vz};if(WANT.hot){WANT.hot.x=me.x;WANT.hot.z=me.z;WANT.hot.r=W_HOT[WANT.stars];}WANT.hotK=1;
   if(WANT.state!=='pursuit')wPursuit(best);
   // a patrol that sees it joins in
-  for(const e of L)if(e.u&&e.u.see&&!e.u.a.pd&&e.car)pdTake(e.u);}
+  for(const e of L){if(e.u&&e.u.see&&!e.u.a.pd&&e.car)pdTake(e.u);else if(e.net&&NET.on&&wCanSee(e,me.x,me.z,R,trk)>=0){try{const u=nwAdopt(e.net);if(u)pdTake(u);}catch(x){}}}}
 function wKnows(me,d){if(WANT.state==='pursuit')return true;
   if(WANT.state==='search'&&WANT.lostT<6&&d<55)return true;   // they were right behind you
   if(me.car&&WANT.evid.veh&&me.car===WANT.evid.veh&&d<95)return true;
@@ -18792,6 +18940,8 @@ function wDispatch(n,urgent){const me=wMe();if(!me)return;const tgt=WANT.state==
   // the cars already out on patrol go first; a car leaves the station only while fewer than the cap are out, so
   // driving past the station with a star or two doesn't empty it
   const cap=W_CAP[WANT.stars]||3;let on=TR.pd.onDuty();
+  // online: another game's patrol cars close by come first (handed over to this game)
+  if(NET.on)try{for(const a of nwPatrolsNear(tgt.x,tgt.z,600)){if(have>=n)break;const u=nwAdopt(a);if(u&&pdTake(u))have++;}}catch(e){console.warn('adopt',e);}
   const free=TR.pd.units().filter(wFree).map(u=>[Math.hypot(u.a.x-tgt.x,u.a.z-tgt.z)+(u.st==='parked'?1e4:0),u]).sort((a,b)=>a[0]-b[0]);
   for(const [,u] of free){if(have>=n)break;const pk=u.st==='parked';if(pk&&on>=cap)break;if(pdTake(u)){have++;if(pk)on++;}}}
 
@@ -20344,7 +20494,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,hitV:hitVehicle,NET,NW,PARK,nwPack,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={scene:()=>scene,hitV:hitVehicle,NET,NW,PARK,nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
