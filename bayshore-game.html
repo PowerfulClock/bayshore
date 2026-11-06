@@ -14706,7 +14706,7 @@ function repairVehicle(v){
       p.home.parent.add(p.pivot);p.pivot.position.copy(p.home.pos);p.pivot.quaternion.copy(p.home.q);p.pivot.scale.copy(p.home.s);}
     p.gone=false;p.broken=false;p.u=0;p.w=0;p.ang=0;p.target=0;p.vel=0;p.closing=false;p.pivot.rotation[p.axis]=0;});
   v.windows.forEach(W=>{W.state='ok';W.cracks=0;W.mesh.visible=true;W.mesh.children.slice().forEach(c=>{if(c.userData.decal){W.mesh.remove(c);c.geometry.dispose();c.material.dispose();}});});
-  lampRepair(v.lamps);v.hb=null;v.ypr=null;
+  lampRepair(v.lamps);v.hb=null;v.ypr=null;try{dentsRepair(v);}catch(e){console.warn('dents',e);}
   const dec=[];v.node.traverse(o=>{if(o.userData.decal)dec.push(o);});dec.forEach(d=>{d.parent.remove(d);d.geometry.dispose();d.material.dispose();});v.decals=0;
   v.rigs=null;v.locked=false;v.hot=true;v.engine=false;m0(v);v.flat=null;v.engHits=0;v.smoking=false;v.engDead=false;v.m.wheels.forEach(w=>{const u=w.userData;if(u._fy!=null&&Math.abs(w.position.y-u._fy)<1e-6)w.position.y=u._fb;u._fy=u._fb=null;u.flatK=0;});
   {const u=v.m.shell.userData;if(u._lq&&v.m.shell.quaternion.equals(u._lq)){v.m.shell.quaternion.copy(u._bq);v.m.shell.position.y=u._by;}u._lq=null;}const ph=v.ph;Object.assign(ph,{u:0,v:0,yr:0,omega:0,omegaF:0,steer:0,thr:0,brk:0,state:'P',gear:0,parked:true,ai:true});ph.in={thr:0,brk:0,steer:0,hand:0};
@@ -14994,7 +14994,7 @@ function stepOne(v,dt){const ph=v.ph,VACC=v.acc||(v.acc={t:0});
   if(big&&(v.hitT<=0||big.mag>(v.lastMag||0)*1.5)){v.hitT=0.25;v.lastMag=big.mag;try{hitVehicle(v,big.dvx,big.dvz,big.mag);}catch(e){console.warn('damage',e);}}
   if(n>=24)VACC.t=0;
   if(DRIVE===v&&ph.crash>0){try{L.crashFor(ph.crash);}catch(e){}ph.crash=0;}
-  if(v.B){v.y=v.B.y-v.B.hcg;ph.y=v.y;
+  if(v.B&&v.B.free){v.y=v.B.y-v.B.hcg;ph.y=v.y;
     const Bh=v.B.hit;if(Bh){v.B.hit=null;if(DRIVE===v){try{L.crashFor(Math.min(1,Bh.mag/12));}catch(e){}}try{bodyLandHit(v,Bh);}catch(e){}}
     Object.assign(v,{x:ph.x,z:ph.z,psi:ph.psi,u:ph.u,v_:ph.v});return;}
   v.y=carY(ph.x,ph.z,v.y);ph.y=v.y;
@@ -15011,19 +15011,19 @@ function syncVehicle(v,dt){const ph=v.ph,m=v.m;
   else{const j=v.y-(v.ypr==null?v.y:v.ypr);if(Math.abs(j)>Math.max(0.12,3*dt))v.yo-=j;v.yo*=Math.exp(-dt*6);v.vy_=v.y+v.yo;
     const k=Math.min(1,dt*18);v.pit+=((v.pitT||0)-v.pit)*k;v.rol=(v.rol||0)+((v.rolT||0)-(v.rol||0))*k;}
   v.ypr=v.y;
-  if(v.B){const P=bodyPose(v);v.node.position.set(P.x,P.y,P.z);v.node.rotation.set(P.roll,ph.psi,P.pitch,'YXZ');}
+  if(v.B&&v.B.free){const P=bodyPose(v);v.node.position.set(P.x,P.y,P.z);v.node.rotation.set(P.roll,ph.psi,P.pitch,'YXZ');}
   else{v.node.position.set(ph.x,v.vy_,ph.z);v.node.rotation.set(v.rol||0,ph.psi,v.pit,'YXZ');}
   Object.assign(v,{x:ph.x,z:ph.z,psi:ph.psi,u:ph.u});
   if(dt)L.physSusp(ph,Math.max(dt,0.001));
   const s=ph.susp,sh=m.shell,b=sh.userData.base,wx=(m.S&&m.S.wx)||45;sh.rotation.order='YXZ';
-  const bt=v.B?{dy:0,dp:0,dr:0}:dt?bodyTerrain(v,v.vy_,v.pit,v.rol||0,dt):{dy:v.bdy||0,dp:v.bdp||0,dr:v.bdr||0};v.bdy=bt.dy;v.bdp=bt.dp;v.bdr=bt.dr;
+  const bt=v.B&&v.B.free?{dy:0,dp:0,dr:0}:dt?bodyTerrain(v,v.vy_,v.pit,v.rol||0,dt):{dy:v.bdy||0,dp:v.bdp||0,dr:v.bdr||0};v.bdy=bt.dy;v.bdp=bt.dp;v.bdr=bt.dr;
   const shi=v.shi||(v.shi=1/sh.parent.getWorldScale(V3()).y);
   sh.rotation.z=b.rz+(s.r-s.f)/(2*wx)+bt.dp;sh.rotation.x=b.rx+s.roll+bt.dr;sh.position.y=b.y-(s.f+s.r)/2*0.7+bt.dy*shi;sh.position.z=b.z-11.4*Math.sin(s.roll);
   if(dt){ph.spinD=(ph.spinD||0)+ph.omega*dt;ph.spinU=(ph.spinU||0)+ph.omegaF*dt;}
   const dr=ph.spec.drive;
-  m.wheels.forEach((w,i)=>{const front=i<2,driven=dr==='awd'||(dr==='fwd'&&front)||(dr==='rwd'&&!front),tgt=-(driven?ph.spinD||0:ph.spinU||0),u=w.userData;
+  m.wheels.forEach((w,i)=>{if(w.userData.gone)return;const front=i<2,driven=dr==='awd'||(dr==='fwd'&&front)||(dr==='rwd'&&!front),tgt=-(driven?ph.spinD||0:ph.spinU||0),u=w.userData;
     if(u.prevT===undefined){u.prevT=tgt;u.vis=w.rotation.z;}const dA=(!front&&ph.hand)?0:tgt-u.prevT;u.prevT=tgt;u.vis+=clamp(dA,-0.33,0.33);
-    w.rotation.order='YXZ';w.rotation.z=u.vis;w.rotation.y=front?ph.steer:0;});
+    w.rotation.order='YXZ';w.rotation.z=u.vis;w.rotation.y=front?ph.steer:0;wheelDmgApply(w);});
   if(dt&&DRIVE===v&&Math.abs(ph.u)>1.5)m.parts.forEach(p=>{if(p.kind==='door'&&p.target&&!p.broken&&!p.gone)togglePart(p,false);});
   if(dt){stepPanels(m,dt);panelsSyncU(v);panelsStep(v,dt);}
   const night=todName!=='day',braking=ph.brk>0.1&&Math.abs(ph.u)>0.05||ph.hand;
@@ -15238,7 +15238,7 @@ function hitVehicle(v,dvx,dvz,mag){if(!v||!v.windows||mag<0.8)return;if(mag>3)pf
     if(h){hit=h;break;}}
   t0=dpT('rays',t0);const local=hit?v.node.worldToLocal(hit.point.clone()):new THREE.Vector3(lx*v.halfLen,0.6,lz*v.halfWid);
   // scuffed paint where it hit
-  if(hit&&v.decals<60){const N=hit.face?hit.face.normal.clone().transformDirection(hit.object.matrixWorld):new THREE.Vector3(cx,0,cz);
+  if(false&&hit&&v.decals<60){   // scuffs off for now: a decal floats off the panel once the panel under it is dentedconst N=hit.face?hit.face.normal.clone().transformDirection(hit.object.matrixWorld):new THREE.Vector3(cx,0,cz);
     const size=clamp(0.22+mag*0.08,0.22,1.4);const spin=(zone==='F'||zone==='B')?Math.PI/2*(Math.random()<0.5?1:-1)*0+ (Math.random()-0.5)*0.4:(Math.random()-0.5)*0.3;
     // laid on the next frame (spreads the work of a crash out), at the same spot on the car
     const ob=hit.object,Pl=ob.worldToLocal(hit.point.clone()),Nl=N.clone().transformDirection(new THREE.Matrix4().copy(ob.matrixWorld).invert()),op=clamp(0.45+mag*0.07,0.45,1);v.decals++;
@@ -15263,7 +15263,7 @@ function hitVehicle(v,dvx,dvz,mag){if(!v||!v.windows||mag<0.8)return;if(mag>3)pf
       const open=p.u>0.25;
       if(open&&((p.w>6.5)||(nearP&&mag>4.5&&zone!=='F')||(zone==='B'&&mag>5&&p.kind==='door')))detachPanel(v,p,mag);
       else if(open&&zone==='F'&&p.kind==='door'&&p.w<-3)sndSlamHard();}});
-  dpT('panels',t0);if(DRIVE!==v&&!v.traffic)sndCrunch(mag);}
+  dpT('panels',t0);try{wheelsHit(v,local,mag,new THREE.Vector3(-lx,0,-lz));}catch(e){console.warn('wheels',e);}if(DRIVE!==v&&!v.traffic)sndCrunch(mag);}
 function crackWindshield(v,W,mag,hit){if(W.cracks>=4)return;
   // a web where it took the blow: aim at the windshield from in front (a few tries, so a miss off the edge of the glass doesn't lose it)
   let h=null;for(let k=0;k<6&&!h;k++){const r=k===5?0:1;
@@ -15491,7 +15491,7 @@ function dentVehicle(v,P,D,mag,from){if(!v||mag<2.2||(CFG.gfx&&CFG.gfx.dents===f
     // its own copy of the shape (positions and normals; the rest stays shared), and the shape it started as
     if(o.userData.dentGeo!==g){const ng=new THREE.BufferGeometry();for(const k in g.attributes)ng.setAttribute(k,(k==='position'||k==='normal')?g.attributes[k].clone():g.attributes[k]);
       if(g.index)ng.setIndex(g.index);ng.groups=g.groups.map(q=>({...q}));if(g.boundingSphere)ng.boundingSphere=g.boundingSphere.clone();if(g.boundingBox)ng.boundingBox=g.boundingBox.clone();
-      ng.userData={gs:g.userData.gs,p0:Float32Array.from(g.attributes.position.array)};o.geometry=ng;o.userData.dentGeo=ng;}
+      ng.userData={gs:g.userData.gs,p0:Float32Array.from(g.attributes.position.array),n0:g.attributes.normal?Float32Array.from(g.attributes.normal.array):null};o.geometry=ng;o.userData.dentGeo=ng;}
     const G=o.geometry,A=G.attributes.position,a=A.array,p0=G.userData.p0,N=G.attributes.normal,na=N&&N.array;
     for(let i=0,k=0;i<A.count;i++,k+=3){const ex=a[k]-Pl.x,ey=a[k+1]-Pl.y,ez=a[k+2]-Pl.z,d2=ex*ex+ey*ey+ez*ez;if(d2>=R2)continue;
       const f=1-d2/R2,w=f*f,cr=0.75+0.5*Math.abs(Math.sin(a[k]*37.1+a[k+1]*19.7+a[k+2]*23.3)),m=dl*w*cr;
@@ -15513,6 +15513,37 @@ function bodyLandHit(v,h){const B=v.B;if(!B)return;const ph=v.ph;
   // only the body points (a landing on the wheels is soaked up by the springs)
   if(Math.cos(B.roll)>0.75&&Math.cos(B.pitch)>0.75&&h.mag<9)return;
   dentVehicle(v,P,new THREE.Vector3(0,1,0),h.mag*1.25);}
+
+/* ---------------------------------------------------------------------------
+   Wheels: a hit near one pushes it in toward the car and bends it (camber and toe), more with each hit; a hard
+   enough one tears it off and it rolls and bounces away. A car with a wheel gone drags on that corner.
+--------------------------------------------------------------------------- */
+function wheelsHit(v,local,mag,dl){if(v.traffic||!v.m||!v.m.wheels||mag<4)return;v.node.updateMatrixWorld(true);
+  v.m.wheels.forEach((w,i)=>{const u=w.userData;if(u.gone)return;const c=v.node.worldToLocal(w.getWorldPosition(V3()));
+    const d=Math.hypot(c.x-local.x,c.z-local.z);if(d>1.1)return;const k=(mag-4)*(1-d/1.1);if(k<=0.2)return;
+    const wd=u.wd||(u.wd={p0:w.position.clone(),dz:0,cam:0,toe:0,sum:0}),side=Math.sign(c.z)||1;
+    // pushed in (toward the middle), the top leaning in, the front or back of it swung by where the blow came from
+    wd.dz=clamp(wd.dz-side*k*0.012,-0.2,0.2);wd.cam=clamp(wd.cam+side*k*0.025,-0.45,0.45);wd.toe=clamp(wd.toe+(dl.x>0?1:-1)*side*k*0.018+(Math.random()-0.5)*k*0.01,-0.4,0.4);wd.sum+=k;
+    if(wd.sum>15||(k>12&&Math.random()<0.6))wheelOff(v,w,i,mag);});}
+function wheelOff(v,w,i,mag){const u=w.userData;if(u.gone)return;u.gone=true;u.home={parent:w.parent,pos:w.position.clone(),q:w.quaternion.clone()};
+  w.updateMatrixWorld(true);const axle=new THREE.Vector3(0,0,1).transformDirection(w.matrixWorld);
+  const grp=new THREE.Group();grp.position.copy(w.getWorldPosition(V3()));scene.add(grp);grp.updateMatrixWorld(true);grp.attach(w);
+  const ph=v.ph,cp=Math.cos(ph.psi),sp=Math.sin(ph.psi),vx=ph.u*cp-ph.v*sp,vz=-ph.u*sp-ph.v*cp;
+  DMG.debris.push({grp,thin:axle,vx:vx*0.8+axle.x*(1.5+mag*0.15)+(Math.random()-0.5)*2,vy:1+Math.random()*1.5+mag*0.1,vz:vz*0.8+axle.z*(1.5+mag*0.15)+(Math.random()-0.5)*2,
+    w:new THREE.Vector3((Math.random()-0.5)*6,(Math.random()-0.5)*6,(Math.random()-0.5)*6),t:0,rest:false,hh:0.3});
+  // the corner drags (the physics' flat-tyre model: little grip, a pull to that side)
+  if(ph){ph.flat=ph.flat||[false,false,false,false];ph.flat[i]=true;v.flat=ph.flat;}
+  sndTear(mag);sndClang(1);}
+// each frame (after the wheel spins and steers): where the damage has moved it
+function wheelDmgApply(w){const wd=w.userData.wd;if(!wd)return;const sc=w.parent?w.parent.getWorldScale(V3()).z||1:1;
+  w.position.z=wd.p0.z+wd.dz/sc;w.rotation.x=wd.cam;w.rotation.y+=wd.toe;}
+// fixed (the car back in the garage): the dents knocked out and the wheels back on
+function dentsRepair(v){(v.meshRoot||v.node).traverse(o=>{const G=o.userData&&o.userData.dentGeo;if(!G||o.geometry!==G)return;const A=G.attributes.position;A.array.set(G.userData.p0);A.needsUpdate=true;
+    if(G.userData.n0&&G.attributes.normal){G.attributes.normal.array.set(G.userData.n0);G.attributes.normal.needsUpdate=true;}});
+  if(v.m&&v.m.wheels)v.m.wheels.forEach(w=>{const u=w.userData;if(u.gone&&u.home){const grp=w.parent;u.home.parent.add(w);w.position.copy(u.home.pos);w.quaternion.copy(u.home.q);
+      const k=DMG.debris.findIndex(d=>d.grp===grp);if(k>=0)DMG.debris.splice(k,1);if(grp&&grp.parent)grp.parent.remove(grp);}
+    if(u.wd){w.position.z=u.wd.p0.z;w.rotation.x=0;}u.gone=false;u.home=null;u.wd=null;});
+  v.B=null;}
 
 /* ---------------------------------------------------------------------------
    Parked cars and breaking into them.
@@ -17769,10 +17800,35 @@ function bodyInit(v){const ph=v.ph;
   for(const sz of [-1,1])body.push(new THREE.Vector3(0,H*0.5-hcg,sz*hw*1.02));
   const Ix=(4*hw*hw+H*H)/12*1.1,Iz=(4*hl*hl+H*H)/12*1.1,Iy=(4*hl*hl+4*hw*hw)/12;
   const gy=carY(ph.x,ph.z,v.y);
-  return v.B={y:gy+hcg,vy:0,roll:0,pitch:0,p:0,q:0,hcg,H,hl,hw,wheels,body,Ix,Iz,Iy,kW,cW,wc:4,bc:0,gy,sleep:0,upT:0,land:0};}
+  return v.B={y:gy+hcg,vy:0,roll:0,pitch:0,p:0,q:0,hcg,H,hl,hw,fa,ra,tw,wheels,body,Ix,Iz,Iy,kW,cW,wc:4,bc:0,gy,sleep:0,upT:0,land:0,free:false,yb:gy,vyb:0,vg:0,gq:0,gp:0,okT:0};}
 // the fraction of tyre grip there is (the wheels touching)
-const bodyGrip=v=>v.B?v.B.wc/4:1;
+const bodyGrip=v=>v.B&&v.B.free?v.B.wc/4:1;
+/* On the road the car is exactly what it always was (the old suspension: the body follows the ground under the wheels,
+   with its own small squat, dive and lean); the free body below only takes over when the car leaves the ground (a
+   ballistic copy of the car flies higher than the springs can reach down) or tips over (sliding sideways into soft
+   ground with more side force than its width can hold), and hands back once it is down on its wheels and settled. */
 function bodyStep(v,h){const ph=v.ph,B=v.B||bodyInit(v);
+  if(B.free){bodyFree(v,h);
+    if(B.wc===4&&B.bc===0){const g=bodyGround(v);if(Math.abs(wrapA(B.roll-g.roll))<0.12&&Math.abs(B.pitch-g.pitch)<0.12&&Math.abs(B.p)<0.5&&Math.abs(B.q)<0.5&&Math.abs(B.vy)<0.8){B.okT+=h;if(B.okT>0.25){B.free=false;B.okT=0;B.yb=g.y;B.vyb=0;v.hb=null;v.vy_=null;}}else B.okT=0;}else B.okT=0;
+    return;}
+  const g=bodyGround(v),sp=Math.hypot(ph.u,ph.v);
+  // the ground's own up and down speed under the car (smoothed: steps in the road data aren't ramps) and its pitch rate
+  const vgI=(g.y-B.gy0)/h;B.gy0=g.y;if(!isFinite(vgI)||Math.abs(vgI)>40){B.vg=0;}else B.vg+=(vgI-B.vg)*Math.min(1,h/0.08);
+  B.gq+=(((g.pitch-(B.gpi==null?g.pitch:B.gpi))/h)-B.gq)*Math.min(1,h/0.08);B.gpi=g.pitch;
+  // a ballistic copy of the car: on the ground it rides it; when the ground falls away faster than it can fall, it flies
+  B.vyb-=CB_G*h;B.yb+=B.vyb*h;if(B.yb<=g.y){B.yb=g.y;B.vyb=Math.max(B.vyb,B.vg);}
+  B.y=g.y+B.hcg;B.roll=g.roll;B.pitch=g.pitch;B.vy=B.vg;B.p=0;B.q=0;B.wc=4;B.bc=0;B.gy=g.y;
+  if(sp>6&&B.yb-g.y>0.14){B.free=true;B.y=B.yb+B.hcg;B.vy=B.vyb;B.q=clamp(B.gq*0.6,-1.5,1.5);B.okT=0;return;}
+  // tripping: sliding sideways into grass or dirt (or over a kerb) faster than the car's width can take
+  if(Math.abs(ph.v)>4.5){const gk=groundAt(ph.x,ph.z,g.y+1).kind;if(gk==='ground'||gk==='island'||gk==='walk'){const dv=Math.abs(ph.v)-4.5,trip=Math.min(26,dv*(gk==='ground'?3.2:1.6));
+      ph.v-=Math.sign(ph.v)*Math.min(Math.abs(ph.v),trip*h*0.6);
+      const lat=Math.abs((ph.ay||0)-Math.sign(ph.v)*trip),need=CB_G*B.tw/B.hcg;
+      if(lat>need*1.05){B.free=true;B.okT=0;B.p=-Math.sign(ph.v)*clamp((lat-need)/need*4,0.8,5);B.vy=0.5;}}}}
+// the ground under the four wheels: height at the middle, pitch and roll (the old suspension's own measure)
+function bodyGround(v){const ph=v.ph,B=v.B,cp=Math.cos(ph.psi),sp=Math.sin(ph.psi),fa=B.fa,ra=B.ra,tw=B.tw;
+  const at=(lx,lz)=>carY(ph.x+cp*lx+sp*lz,ph.z-sp*lx+cp*lz,B.gy);const fl=at(fa,-tw),fr=at(fa,tw),rl=at(-ra,-tw),rr=at(-ra,tw);
+  return {y:(fl+fr+rl+rr)/4,pitch:Math.atan2((fl+fr)-(rl+rr),2*(fa+ra)),roll:Math.atan2((fl+rl)-(fr+rr),4*tw)};}
+function bodyFree(v,h){const ph=v.ph,B=v.B;
   // teleported (respawn, a car moved by the game): start again from the ground
   const gc=carY(ph.x,ph.z,B.gy);if(Math.abs(gc-(B.y-B.hcg))>6&&B.wc>0){B.y=gc+B.hcg;B.vy=0;B.p=B.q=0;B.roll=B.pitch=0;}B.gy=gc;
   // at rest: no need to work it out every step
