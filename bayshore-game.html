@@ -10528,8 +10528,11 @@ const TR_H=1/240;
 let TR_EXTRA=[];   // other cars traffic must see: the player's own car, parked or not
 const TRLIGHT={on:false};   // headlights and tail lamps on (sunset, night, sunrise)
 const POL={units:[],pt:{},inc:null,t:0};
-function netCloserOther(){return false;}
-function netPlayerD(x,z){return TP?Math.hypot(x-TP.x,z-TP.z):1e9;}
+// online: the other players (window.BAY_NETP, [x,z] each, kept by net.js). Each game fills the roads nearest its own
+// player; traffic is kept, and driven properly, while any player is near it; the signals run on the shared clock
+function netOthersP(){const o=window.BAY_NETP;return o&&o.length?o:null;}
+function netCloserOther(x,z){const o=netOthersP();if(!o||!TP)return false;const dm=Math.hypot(x-TP.x,z-TP.z);return o.some(s=>Math.hypot(x-s[0],z-s[1])<dm);}
+function netPlayerD(x,z){let d=TP?Math.hypot(x-TP.x,z-TP.z):1e9;const o=netOthersP();if(o)for(const s of o)d=Math.min(d,Math.hypot(x-s[0],z-s[1]));return d;}
 function polSirenStop(){} function boomClear(){} function policeVisual(){} function polRejoin(){}
 // a cruiser behind with its siren going (POL.units, kept by the wanted system): ease off and move over to the right
 function polYield(a,dt){let hit=false;for(const e of POL.units){if(!e.alive||e===a)continue;const dx=a.x-e.x,dz=a.z-e.z;if(Math.abs(dx)>75||Math.abs(dz)>75)continue;
@@ -10538,7 +10541,7 @@ function polYield(a,dt){let hit=false;for(const e of POL.units){if(!e.alive||e==
 function carExplode(a){a.burnt=true;a.hazard=false;a.acc=true;}
 function damageCar(d){if(TP&&TP.spec)TP.health=Math.max(0,(TP.health==null?100:TP.health)-d);}
 function surfaceAt(){return 'asphalt';}
-let SIGT=0;function sigClock(){return SIGT;}   // game time: signals stop while the game is paused
+let SIGT=0;function sigClock(){return window.BAY_NETP?Date.now()/1000:SIGT;}   // game time: signals stop while the game is paused
 const trInTown=(x,z)=>TRCITY(x,z)>0.5;
 Object.assign(TRAFFIC,{cars:[],id:0,t:0,spawnT:0,copT:0,station:null,warm:false,frame:0,ready:false});
 const TR_PAINT=[['#e9e9e6',17],['#111214',15],['#c3c6ca',4],['#a7abb0',7],['#8a8e94',5],['#71757b',4],['#5d6167',6],['#474b50',4],['#3a3d41',3],
@@ -11327,7 +11330,7 @@ function trSync(a,dt,force){
   {let pit=0;if(a.sim==='kin'&&a.path.length>2){const f=trAt(a,a.s+1.4),r=trAt(a,a.s-1.4);pit=Math.atan2((f.y||0)-(r.y||0),2.8);}else if(a.gy!=null)pit=a.gy;
    const k=dt?Math.min(1,dt*12):1;const yt=(a.y||0)+(a.sim==='kin'?0.06:0);if(a.vy_==null||!dt){a.vyo=0;a.vy_=yt;a.vp_=pit;}else{const j=yt-(a.ytp==null?yt:a.ytp);if(Math.abs(j)>Math.max(0.12,3*dt))a.vyo-=j;a.vyo*=Math.exp(-dt*6);a.vy_=yt+a.vyo;a.vp_+=(pit-a.vp_)*Math.min(1,dt*18);}a.ytp=yt;root.position.y=a.vy_;root.rotation.z=a.vp_;}
   const full=a.alpha>=1&&dc<(a.unit?(a.parked||a.unit.st==='parked'?Math.min(30,+CFG.gfx.trDetail||85):Math.min(55,+CFG.gfx.trDetail||85)):(+CFG.gfx.trDetail||85));
-  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700))&&!(a.occl&&!window.PHOTO_ON);if(root.visible!==shown)root.visible=shown;
+  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700))&&!(a.occl&&!window.PHOTO_ON)&&!a.netHide;if(root.visible!==shown)root.visible=shown;
   if(a.full.visible!==full||force){a.full.visible=full;a.prox.visible=!full;}
   if(!full){const op=a.alpha;a.proxM.forEach(m=>{const tr=op<0.999;if(m.transparent!==tr){m.transparent=tr;m.depthWrite=!tr;}m.opacity=op;});}
   else if(dc<60&&a.sim==='phys'&&!a.parked){const P=car;car=a;try{stepSusp(Math.max(dt,0.001));}finally{car=P;}
@@ -11527,7 +11530,8 @@ function polFreeBay(avoidSeen){const S=BPD.st;if(!S)return null;const free=S.bay
 // out on the road: patrolling cars, and the units working a call or a pursuit (those count as patrol too)
 function polOnDuty(){return BPD.units.filter(u=>u.a.alive&&(u.a.pd?u.a.pd.role!=='dead':!u.retire&&u.st!=='parked'&&u.st!=='return')).length;}
 // on patrol at once: at most three cars (the rest wait at the station until there's a call), at least two
-function polDutyBand(){const n=BPD.units.filter(u=>!u.retire).length;return [Math.min(2,n),Math.min(3,n)];}
+function polDutyBand(){const n=BPD.units.filter(u=>!u.retire).length;if(window.BAY_NETPATROL===false)return [0,0];   // online: only one game (the host) keeps the patrols
+  return [Math.min(2,n),Math.min(3,n)];}
 // patrol cars only: the ones the wanted system has taken don't count
 function polPatrolling(){return BPD.units.filter(u=>!u.retire&&!u.a.pd&&u.st==='patrol').length;}
 function polCreateUnit(bay,init){const S=BPD.st;if(!S||!bay)return null;const models=BPD_MODELS.filter(k=>TPL[k]);if(!models.length)return null;
@@ -11694,6 +11698,15 @@ window.BAYTR={
         if(a.panicT<=0){a.fleeTurned=false;a.panicStuck=0;}}
       if(!a.scaredT)continue;a.scaredT-=dt;if(a.scaredT<=0){a.scaredT=0;if(a.persB){Object.assign(a.pers,a.persB);a.persB=null;}}}},
   remove:a=>{if(a&&a.alive)trRemove(a);},
+  // online: another game's car (traffic or police), moved here by the network and never driven by this game
+  remoteCar:{
+    make(key,col,x,y,z,psi,txt){if(!TPL[key])return null;const a=trCreate(key,{parked:true,instant:true,x,z,psi,color:col||undefined,unitText:txt||undefined});if(!a)return null;
+      Object.assign(a,{parked:false,awake:true,remote:true,netTr:true,state:'D',alpha:1,fade:1,sim:'phys',mode:'remote',u:0,v:0,yr:0,gear:1,rpm:900});a.r=a.r||0.33;
+      a.in={thr:0,brk:0,steer:0,hand:0};a.y=y||0;a.vy_=null;a.susp={f:0,r:0,vf:0,vr:0,roll:0,vroll:0};trSync(a,0,true);return a;},
+    // the light bar of another game's police car
+    lights(a,on,cam,rend,dark){const G=a.ghostL||(a.ghostL={id:'n'+a.id,dept:'bayshore'});G.lights=!!on;G.st='patrol';const Lm=lightsInit();Lm.set(cam,rend,TRAFFIC.t,dark,false);
+      const u=a.unit;a.unit=null;a.ghostUnit=G;try{Lm.polLights(a);}finally{a.unit=u;a.ghostUnit=null;}return a.lbLevel||null;},
+    has:k=>!!TPL[k]},
   // a car that can't go on (its driver shot, its engine shot, a flat): it brakes to a stop with its hazards on and stays
   stopCar(a,flat,coast){if(!a||!a.alive||a.parked)return;if(a.sim==='kin')trToPhys(a);if(!a.acc)trAccident(a);a.accT=TRAFFIC.t;a.dead=true;a.coast=!!coast;a.hazard=!flat&&!coast;},
   spawnParked(key,o){if(!TPL[key])return null;const a=trCreate(key,{parked:true,instant:true,x:o.x,z:o.z,psi:o.psi,color:o.color||undefined});if(!a)return null;
@@ -14819,7 +14832,7 @@ const H=1/240;
 let VEH=null;            // the one vehicle you have out: {key,name,node,m,ph,halfLen,halfWid,y,pit,rig}
 let DRIVE=null;          // the vehicle while you are driving it
 const CARS=[];           // every drivable car out: the one you called up and any you've broken into
-function refreshExtra(){TR.setExtra(CARS.filter(v=>v!==DRIVE&&v.alive).map(v=>v.ph));}
+function refreshExtra(){const L=CARS.filter(v=>v!==DRIVE&&v.alive).map(v=>v.ph);if(NET.on)try{L.push(...nwExtra());}catch(e){}TR.setExtra(L);}
 const COP_KEYS=['crownvic_p71','impala_9c1'];
 function buildVehicle(key,color){const civ=L.CIVIL.find(c=>c[0]===key)||(COP_KEYS.includes(key)&&L.PRESETS[key]?[key,'#f3f5f1',L.PRESETS[key].name.replace(/\s*\(police\)/i,''),{police:true}]:null);if(!civ)return null;const opts=civ[3]||{};
   const PA='#204060',taxi=!!opts.taxi,o=opts.police?(()=>{const TP0=TR.templates(),had=Object.prototype.hasOwnProperty.call(TP0,key),keep=TP0[key];try{return L.buildCruiser(key,'B'+(70+((Math.random()*20)|0)),'bayshore');}finally{if(had)TP0[key]=keep;else delete TP0[key];}})():L.buildCivilian(key,taxi?civ[1]:PA,opts);const holder=new THREE.Group();holder.add(o.grp);
@@ -14943,7 +14956,7 @@ function carBoxD(ph,hl,hw,x,z){const c=Math.cos(ph.psi),s=Math.sin(ph.psi),dx=x-
 // the car you'd get into from here: your own or one you've broken into, or a parked one (to break into)
 function carToEnter(){const P=ME.it.pl;let best=null;
   for(const v of CARS){if(!v.alive)continue;const b=carBoxD(v.ph,v.halfLen,v.halfWid,P.x,P.z);if(b.d<1.4&&Math.abs(P.y-v.y)<1.2&&(!best||b.d<best.d))best={v,d:b.d,side:b.side};}
-  for(const a of TR.cars()){if(!a.alive||a.alpha<1)continue;
+  for(const a of TR.cars()){if(!a.alive||a.alpha<1||a.remote)continue;
     // a police car: with officers in it (they're thrown out), parked at the station (broken into), or left empty
     if(a.unit||(a.tpl&&a.tpl.police)){const h=wCruiserEnterable(a);if(!h)continue;const b=carBoxD(a,a.halfLen,a.halfWid,P.x,P.z);if(b.d<1.4&&Math.abs(P.y-(a.y||0))<1.2&&(!best||b.d<best.d))best={a,jack:h.jack,cop:h,d:b.d,side:b.side};continue;}
     // parked: break in; in traffic: only one that has stopped (under 2 mph) with someone at the wheel
@@ -15778,21 +15791,26 @@ function parkInit(){const L=WD.parking||[];PARK.spots=L.map(p=>{let ang=p[2],bes
     if(best){const rx=best[0]-p[0],rz=best[1]-p[1],l=Math.hypot(rx,rz),px=-rz/l,pz=rx/l;let a2=Math.atan2(-pz,px);
       if(Math.cos(a2-p[2])<0)a2+=Math.PI;if(Math.abs(Math.atan2(Math.sin(a2-p[2]),Math.cos(a2-p[2])))<0.6)ang=a2;}
     return {x:p[0],z:p[1],ang,lot:p[3],want:null,a:null};});}
-function parkKey(){const T=TR.templates(),keys=Object.keys(T).filter(k=>T[k]&&!T[k].taxi&&!T[k].police);return keys[Math.floor(Math.random()*keys.length)];}
+// which spots have a car, which car, which way round and what colour: the same numbers in every game (online, everyone
+// sees the same parked cars), new numbers every ten minutes
+const PARK_COL=['#e9e9e6','#111214','#c3c6ca','#a7abb0','#8a8e94','#5d6167','#3a3d41','#1f3a68','#8e1b1e','#2c2f33','#7b2a33','#264a3a','#c9c2b0','#2d5d8c','#5a3b26','#d9d2c4'];
+function parkHash(i,k){let h=(i*374761393+k*668265263+Math.floor(Date.now()/600000)*1274126177)|0;h=Math.imul(h^(h>>>13),1274126177);h^=h>>>16;return (h>>>0)/4294967296;}
+function parkKey(i){const T=TR.templates(),keys=Object.keys(T).filter(k=>T[k]&&!T[k].taxi&&!T[k].police).sort();return keys[Math.floor((i==null?Math.random():parkHash(i,3))*keys.length)];}
 function spotTaken(s){for(const v of CARS)if(v.alive&&Math.hypot(v.ph.x-s.x,v.ph.z-s.z)<3.2)return true;
   for(const a of TR.cars())if(a.alive&&Math.hypot(a.x-s.x,a.z-s.z)<3.2)return true;
   const P=ME.it&&ME.it.pl;return !!(P&&Math.hypot(P.x-s.x,P.z-s.z)<3.5);}
 function parkStep(dt){if(!ME.it)return;if(!PARK.spots)parkInit();PARK.t-=dt;if(PARK.t>0)return;PARK.t=0.4;
   const P=ME.it.pl;let made=0;
-  for(const s of PARK.spots){const d=Math.hypot(s.x-P.x,s.z-P.z);
-    if(s.a&&!s.a.alive){s.a=null;s.want=false;}          // driven off or broken into: the spot stays empty while you're about
+  for(let i=0;i<PARK.spots.length;i++){const s=PARK.spots[i],d=Math.hypot(s.x-P.x,s.z-P.z);
+    if(NET.on&&NW.pkOther.has(i)){if(s.a){if(s.a.alive)TR.remove(s.a);s.a=null;}s.want=false;continue;}   // someone else on the server took this one
+    if(s.a&&!s.a.alive){s.a=null;s.want=false;if(NET.on)NW.pkGone.add(i);}          // driven off or broken into: the spot stays empty while you're about
     if(d>520){if(s.a&&!TR.seen(s.a.x,s.a.z,3)){TR.remove(s.a);s.a=null;}if(!s.a)s.want=null;continue;}
     if(d>430||s.a)continue;
-    if(s.want==null)s.want=Math.random()<PARK_FILL;
+    if(s.want==null)s.want=parkHash(i,1)<PARK_FILL;
     // only where it can't be seen arriving: not close by, and off screen or behind something
     if(!s.want||made>=1||d<30||TR.seen(s.x,s.z,3.5)||spotTaken(s))continue;
-    const psi=s.ang+(Math.random()<0.5?Math.PI:0),y=carY(s.x,s.z,null);
-    s.a=TR.spawnParked(parkKey(),{x:s.x,z:s.z,psi,y,color:null});if(s.a)made++;}}
+    const psi=s.ang+(parkHash(i,2)<0.5?Math.PI:0),y=carY(s.x,s.z,null);
+    s.a=TR.spawnParked(parkKey(i),{x:s.x,z:s.z,psi,y,color:PARK_COL[Math.floor(parkHash(i,4)*PARK_COL.length)]});if(s.a){s.a.parkSpot=i;made++;}}}
 
 /* ---- the alarm and the hazards ---- */
 const ALARMS=[];
@@ -15987,6 +16005,8 @@ function ragMake(g,holder,vel,spin,onRest){const N=g.userData.npc;holder.updateM
 function ragCars(){const L=[];for(const a of TR.cars()){if(!a.alive||!a.full||!a.full.visible)continue;L.push({x:a.x,z:a.z,y:a.vy_!=null?a.vy_:(a.y||0),psi:a.psi,hl:a.halfLen,hw:(a.tpl&&a.tpl.wid)||a.halfWid+0.1,
     u:a.sim==='kin'?(a.vk||0):(a.u||0),v:a.sim==='kin'?0:(a.v||0)});}
   for(const v of CARS)if(v.alive)L.push({src:v,x:v.ph.x,z:v.ph.z,y:v.vy_!=null?v.vy_:v.y,psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9,u:v.ph.u,v:v.ph.v});
+  // online: the other players' cars hit people too
+  if(NET.on)for(const R of NET.rem.values()){const v=R.car;if(!v||!v.ph||!R.pr||!R.pr.c||!v.halfLen)continue;L.push({x:v.ph.x,z:v.ph.z,y:v.node.position.y,psi:v.ph.psi,hl:v.halfLen,hw:v.halfWid/0.9,u:v.ph.u||0,v:0});}
   return L;}
 function ragSim(R,h,cars){const p=R.p,pr=R.prev;
   // a body tumbling through the air slows its spin (arms and legs drag, the body isn't a rigid wheel): each point's speed
@@ -16131,6 +16151,7 @@ function pedSpot(){const P=pedHere(),v=DRIVE?Math.hypot(DRIVE.ph.u,DRIVE.ph.v):0
     const r=lerp(48,125,Math.random())+v*2,x=P.x+Math.cos(ang)*r,z=P.z+Math.sin(ang)*r,R=roadBeside(x,z);if(!R)continue;
     const sg=Math.random()<0.5?1:-1,lane=1.0+Math.random()*1.2,off=R.q.hw+lane,sx=R.q.x+R.nx*sg*off,sz=R.q.z+R.nz*sg*off;
     const gr=groundAt(sx,sz,R.q.y+3);if(gr.kind!=='walk'&&gr.kind!=='island')continue;if(insideBuilding(sx,sz))continue;
+    if(nwCloserOther(sx,sz))continue;   // online: nearer another player, whose game puts people here
     if(TR.seen(sx,sz,1.4)||camera.position.distanceTo(V3().set(sx,gr.y+1,sz))<40)continue;
     if(PEDS.some(p=>Math.hypot(p.x-sx,p.z-sz)<6))continue;
     return {x:sx,z:sz,y:gr.y,R,sg,lane};}
@@ -16224,8 +16245,9 @@ function hpShow(){let el=document.getElementById('ghp');if(!el){el=document.crea
 function pedStep(dt){if(!ME.it||MODE!=='play')return;const P=ME.it.pl;
   // in and out of the world, unseen
   PEDT.t-=dt;if(PEDT.t<=0){PEDT.t=PEDT.warm?0:0.25;const tg=pedTarget();let n=0;
-    while(PEDS.length<tg&&n<(PEDT.warm?40:1)){n++;if(!pedSpawnGroup()&&!PEDT.warm)break;}PEDT.warm=false;
-    const H=pedHere();for(const p of PEDS.slice()){if((p.cop&&!p.dead)||p.call)continue;const d=Math.hypot(p.x-H.x,p.z-H.z);
+    const cnt=()=>NET.on?PEDS.filter(p=>Math.hypot(p.x-pedHere().x,p.z-pedHere().z)<180).length+nwPedNear(pedHere(),180):PEDS.length;
+    while(cnt()<tg&&n<(PEDT.warm?40:1)){n++;if(!pedSpawnGroup()&&!PEDT.warm)break;}PEDT.warm=false;
+    const H=pedHere();for(const p of PEDS.slice()){if((p.cop&&!p.dead)||p.call)continue;const d=nwMinD(p.x,p.z,Math.hypot(p.x-H.x,p.z-H.z));
       if(p.calledT&&ME.t-p.calledT<25&&d<200)continue;   // someone who just phoned the police doesn't vanish straight after
       if((d>175&&!TR.seen(p.x,p.z,1.5))||d>280||(p.dead&&d>60&&!TR.seen(p.x,p.z,1.5)))pedRemove(p);}}
   if(PLAYER.regenT>0)PLAYER.regenT-=dt;else if(PLAYER.hp<100){PLAYER.hp=Math.min(100,PLAYER.hp+dt*6);hpShow();}
@@ -18101,10 +18123,14 @@ function mqConn(url,o){// o: {will:[topic], subs:[topics], onMsg(topic,bytes), o
   open();return C;}
 
 /* ---- a server: everyone's state on <base>/p/<id> ---- */
-function netRoom(code,listenOnly){const base=NET_V+code+'/p/',me=_rnd(12),myT=base+me,sess=_rnd(6);
+function netRoom(code,listenOnly){const base=NET_V+code+'/p/',wb=NET_V+code+'/w/',me=_rnd(12),myT=base+me,sess=_rnd(6);let wq=0;const wsubs=[],wlast={};
   let mine={},seq=0,closed=false,subs=[],beat=null,prune=null,lastPub=0;const map={},conns=[];
   const emit=()=>{const L=Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr,seen:map[id].seen}));subs.forEach(f=>{try{f(L);}catch(e){}});};
-  const onMsg=(topic,pl)=>{if(topic.indexOf(base)!==0)return;const id=topic.slice(base.length);if(!id||id===me||id.length>20)return;
+  const onMsg=(topic,pl)=>{
+    // the world channel: each game's traffic, police and people near the others (not kept on the relay)
+    if(topic.indexOf(wb)===0){const id=topic.slice(wb.length);if(!id||id===me||id.length>20||!pl.length)return;let d;try{d=JSON.parse(_TD.decode(pl));}catch(e){return;}
+      if(!d||typeof d.q!=='number')return;const L=wlast[id];if(L&&L.s===d.s&&d.q<=L.q)return;wlast[id]={q:d.q,s:d.s};wsubs.forEach(f=>{try{f(id,d);}catch(e){console.warn(e);}});return;}
+    if(topic.indexOf(base)!==0)return;const id=topic.slice(base.length);if(!id||id===me||id.length>20)return;
     if(!pl.length){const m=map[id];if(m)m.seen=Math.min(m.seen,Date.now()-6000);return;}
     let d;try{d=JSON.parse(_TD.decode(pl));}catch(e){return;}if(!d||typeof d!=='object'||typeof d.q!=='number'||!d.p||typeof d.p!=='object'||typeof d.s!=='string')return;
     if(Math.abs(Date.now()-(+d.t||0))>30000)return;const m=map[id];if(m&&m.s===d.s&&d.q<=m.q){m.seen=Date.now();return;}
@@ -18112,6 +18138,8 @@ function netRoom(code,listenOnly){const base=NET_V+code+'/p/',me=_rnd(12),myT=ba
   const send=()=>{if(listenOnly)return;seq++;lastPub=Date.now();const pl=_TE.encode(JSON.stringify({q:seq,s:sess,t:Date.now(),p:mine}));conns.forEach(C=>C.pub(myT,pl,true));};
   const room={me,
     set(p){mine=p;send();},
+    world(o){if(listenOnly)return;o.q=++wq;o.s=sess;const pl=_TE.encode(JSON.stringify(o));conns.forEach(C=>C.pub(wb+me,pl,false));},
+    onWorld(f){wsubs.push(f);},
     onPeers(f){subs.push(f);},
     peers(){return Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr}));},
     connected(){return conns.some(C=>C.ok);},
@@ -18122,7 +18150,7 @@ function netRoom(code,listenOnly){const base=NET_V+code+'/p/',me=_rnd(12),myT=ba
       prune=setInterval(()=>{const now=Date.now();let ch=false;Object.keys(map).forEach(id=>{if(now-map[id].seen>7000){delete map[id];ch=true;}});if(ch)emit();},1000);
       setTimeout(()=>res(room),1100);};
     const to=setTimeout(()=>{if(done)return;done=true;room.leave();rej({code:'network'});},10000);
-    NET_RELAYS.forEach(u=>conns.push(mqConn(u,{will:listenOnly?null:myT,subs:[base+'+'],onMsg,onReady:ready})));});}
+    NET_RELAYS.forEach(u=>conns.push(mqConn(u,{will:listenOnly?null:myT,subs:listenOnly?[base+'+']:[base+'+',wb+'+'],onMsg,onReady:ready})));});}
 
 /* ---- accounts: one retained, encrypted message per username ---- */
 async function acctTopic(u){const h=await crypto.subtle.digest('SHA-256',_TE.encode('bayshore-acct:'+u.trim().toLowerCase()));return NET_V+'acct/'+[...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('').slice(0,40);}
@@ -18205,20 +18233,20 @@ async function netJoinClick(){if(NET.busy)return;const u=(g$('netUser').value||'
 async function netStart(){if(!NET.want||NET.on)return;NET.want=false;NET.on=true;netCSS();
   // the server's rules: medium traffic for everyone (the player's own setting comes back when they leave)
   NET.dens0=CFG.play.density;CFG.play.density=50;
-  try{NET.room=await netRoom(NET_SERVERS[0].id,false);}catch(e){NET.on=false;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}toast('Could not reach the server: playing offline');return;}
-  NET.me=NET.room.me;NET.room.onPeers(L=>{NET.peers=L;});netHud();toast('Online: '+NET_SERVERS[0].name+(NET.acct?' · logged in as '+NET.acct.user:''));}
-function netStop(){if(!NET.on)return;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}if(NET.acct&&NET.dirty)acctPush();if(NET.room)NET.room.leave();NET.room=null;NET.on=false;NET.ride=null;
+  try{NET.room=await netRoom(NET_SERVERS[0].id,false);}catch(e){console.log('online: could not join',e&&(e.stack||e.message||JSON.stringify(e)));NET.on=false;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}toast('Could not reach the server: playing offline');return;}
+  NET.jt=Date.now();NET.me=NET.room.me;NET.room.onPeers(L=>{NET.peers=L;});if(NET.room.onWorld)NET.room.onWorld(nwRecv);netHud();toast('Online: '+NET_SERVERS[0].name+(NET.acct?' · logged in as '+NET.acct.user:''));}
+function netStop(){if(!NET.on)return;if(NET.dens0!==undefined){CFG.play.density=NET.dens0;NET.dens0=undefined;}if(NET.acct&&NET.dirty)acctPush();if(NET.room)NET.room.leave();NET.room=null;NET.on=false;NET.ride=null;try{nwClear();}catch(e){}
   for(const R of NET.rem.values())netRemDrop(R);NET.rem.clear();try{CYC.last=null;todName='';if(STARS)STARS.material.opacity=1;applyPlay();}catch(e){}const h=g$('gnet');if(h)h.remove();if(NET.tags){NET.tags.remove();NET.tags=null;}}
 // what I tell the others
-function netState(){const it=ME.it;if(!it)return null;const P=it.pl,v=DRIVE;const o={n:NET.name,ri:pickI,w:WANT.stars|0,ws:WANT.state==='pursuit'?1:WANT.state==='search'?2:WANT.state==='evade'?3:0};
-  if(NET.ride){const R=NET.rem.get(NET.ride.id);o.sit={id:NET.ride.id,s:NET.ride.seat};if(R&&R.car){o.x=+R.car.node.position.x.toFixed(2);o.z=+R.car.node.position.z.toFixed(2);o.y=+R.car.node.position.y.toFixed(2);}}
+function netState(){const it=ME.it;if(!it)return null;const P=it.pl,v=DRIVE;const o={n:NET.name,jt:NET.jt,ri:pickI,w:WANT.stars|0,ws:WANT.state==='pursuit'?1:WANT.state==='search'?2:WANT.state==='evade'?3:0};
+  if(NET.ride&&NET.ride.seq){const P2=it.pl;o.x=+P2.x.toFixed(2);o.y=+P2.y.toFixed(2);o.z=+P2.z.toFixed(2);o.h=+P2.psi.toFixed(3);o.g=NET.ride.seq.ph==='walk'?0.9:0;o.sitW={id:NET.ride.id,s:NET.ride.seat};}
+  else if(NET.ride){const R=NET.rem.get(NET.ride.id);o.sit={id:NET.ride.id,s:NET.ride.seat};if(R&&R.car){o.x=+R.car.node.position.x.toFixed(2);o.z=+R.car.node.position.z.toFixed(2);o.y=+R.car.node.position.y.toFixed(2);}}
   else if(v){const ph=v.ph,cp=Math.cos(ph.psi),sp=Math.sin(ph.psi);o.c={k:v.key,col:v.color,x:+ph.x.toFixed(2),y:+v.node.position.y.toFixed(2),z:+ph.z.toFixed(2),h:+ph.psi.toFixed(3),
       r:+(v.node.rotation.x||0).toFixed(3),p:+(v.node.rotation.z||0).toFixed(3),vx:+(ph.u*cp-ph.v*sp).toFixed(2),vz:+(-ph.u*sp-ph.v*cp).toFixed(2),st:+(ph.steer||0).toFixed(2),l:v.lightsOn?1:0};
     o.x=o.c.x;o.z=o.c.z;o.y=o.c.y;
     // anyone riding with me (I keep their seats for them)
   }else{o.x=+P.x.toFixed(2);o.y=+P.y.toFixed(2);o.z=+P.z.toFixed(2);o.h=+P.psi.toFixed(3);const g=npcState(it.g).v||0;o.g=+g.toFixed(2);if(ME.dead)o.d=1;if(ME.rag)o.rg=1;}
-  // the police after me, so the others see the chase
-  if(WANT.stars){const cps=[];for(const u of TR.pd.units()){const a=u.a;if(!a.alive||!a.pd||a.pd.role==='dead'||u.out)continue;if(Math.hypot(a.x-o.x,a.z-o.z)>300)continue;cps.push([+a.x.toFixed(1),+(a.y||0).toFixed(1),+a.z.toFixed(1),+a.psi.toFixed(2)]);if(cps.length>=3)break;}if(cps.length)o.cp=cps;}
+  if(NW.pkGone.size)o.pk=[...NW.pkGone];{const pc=nwParkedMine();if(pc)o.pc=pc;}
   if(NET.jk)o.jk=NET.jk;if(NET.jkAck)o.ja=NET.jkAck;return o;}
 function netSend(dt){if(!NET.room)return;NET.sendT-=dt;const moving=!!(DRIVE&&Math.hypot(DRIVE.ph.u,DRIVE.ph.v)>0.3)||(ME.it&&(npcState(ME.it.g).v||0)>0.05);
   if(NET.sendT>0)return;NET.sendT=moving||NET.jk||NET.jkAck?0.1:0.5;const s=netState();if(s)NET.room.set(s);}
@@ -18234,7 +18262,7 @@ function netRemStep(dt){const seen=new Set();
   for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number')continue;seen.add(p.id);const R=netRem(p.id);R.pr=pr;netRemBody(R,(pr.ri|0)%Math.max(1,NPCS.length));const g=R.g;
     // in their own car
     if(pr.c&&typeof pr.c.x==='number'){const v=netRemCar(R,pr.c);if(v){const C=v.cur;const k=Math.min(1,dt*10);C.x+=(pr.c.x+(pr.c.vx||0)*0.1-C.x)*k;C.z+=(pr.c.z+(pr.c.vz||0)*0.1-C.z)*k;C.y+=(pr.c.y-C.y)*k;C.h+=wrapA(pr.c.h-C.h)*k;
-        if(Math.hypot(pr.c.x-C.x,pr.c.z-C.z)>25){C.x=pr.c.x;C.z=pr.c.z;}v.node.position.set(C.x,C.y,C.z);v.node.rotation.set(pr.c.r||0,C.h,pr.c.p||0,'YXZ');
+        if(Math.hypot(pr.c.x-C.x,pr.c.z-C.z)>25){C.x=pr.c.x;C.z=pr.c.z;}v.node.position.set(C.x,C.y,C.z);v.node.rotation.set(pr.c.r||0,C.h,pr.c.p||0,'YXZ');if(v.ph){v.ph.x=C.x;v.ph.z=C.z;v.ph.psi=C.h;v.ph.u=Math.hypot(pr.c.vx||0,pr.c.vz||0);v.ph.v=0;}try{stepPanels(v.m,dt);}catch(e){}
         const sp=Math.hypot(pr.c.vx||0,pr.c.vz||0);(v.m.wheels||[]).forEach((w,i)=>{w.rotation.order='YXZ';w.userData.rs=(w.userData.rs||0)-sp*dt/0.33;w.rotation.z=w.userData.rs;w.rotation.y=i<2?(pr.c.st||0):0;});
         // them at the wheel
         R.node.visible=true;netSeat(R,v,'driver','drive');}}
@@ -18245,10 +18273,7 @@ function netRemStep(dt){const seen=new Set();
       R.node.visible=!pr.d;const k=Math.min(1,dt*10);R.pos.x+=(pr.x-R.pos.x)*k;R.pos.y+=(pr.y-R.pos.y)*k;R.pos.z+=(pr.z-R.pos.z)*k;if(R.pos.distanceTo(_nq.set(pr.x,pr.y,pr.z))>20)R.pos.set(pr.x,pr.y,pr.z);
       R.psi+=wrapA((pr.h||0)-R.psi)*k;R.node.position.copy(R.pos);R.node.rotation.set(0,R.psi,0);g.position.set(0,0,0);g.rotation.set(0,0,0);
       if(camera.position.distanceTo(R.pos)<90)npcPose(g,ME.t+R.ri,pr.g||0,dt);}
-    // their police
-    const cps=pr.cp||[];for(let i=0;i<3;i++){const c=cps[i];let v=R.cops[i];if(!c){if(v)v.node.visible=false;continue;}v=netRemCop(R,i);if(!v)continue;v.node.visible=true;
-      if(!v.cur)v.cur={x:c[0],y:c[1],z:c[2],h:c[3]};const k=Math.min(1,dt*8);v.cur.x+=(c[0]-v.cur.x)*k;v.cur.y+=(c[1]-v.cur.y)*k;v.cur.z+=(c[2]-v.cur.z)*k;v.cur.h+=wrapA(c[3]-v.cur.h)*k;
-      v.node.position.set(v.cur.x,v.cur.y,v.cur.z);v.node.rotation.set(0,v.cur.h,0,'YXZ');}}
+}
   for(const [id,R] of NET.rem)if(!seen.has(id)){netRemDrop(R);NET.rem.delete(id);if(NET.ride&&NET.ride.id===id)netRideOff();}}
 // someone in a seat of a car: posed sitting there
 function netSeat(R,v,seat,kind){const S=(v.m.seats||[]).find(q=>q.name===seat)||(v.m.seats||[])[0];if(!S)return;v.node.updateMatrixWorld(true);
@@ -18260,11 +18285,41 @@ function netCarNear(){if(!ME.it||ME.car)return null;const P=ME.it.pl;let best=nu
 function netFreeSeat(R){const taken=new Set([...NET.peers].filter(p=>p.pr&&p.pr.sit&&p.pr.sit.id===R.id).map(p=>p.pr.sit.s));const P=ME.it.pl;
   const L=(R.car.m.seats||[]).filter(s=>s.name!=='driver'&&!taken.has(s.name));let best=null,bd=1e9;
   for(const s of L){const w=s.obj.getWorldPosition(V3());const d=Math.hypot(w.x-P.x,w.z-P.z);if(d<bd){bd=d;best=s;}}return best;}
-function netRideOn(R){const S=netFreeSeat(R);if(!S){toast('No free seat');return;}if(WP.eq)wpSnapHolster();try{melStow();}catch(e){}NET.ride={id:R.id,seat:S.name};toast('Riding with '+(R.pr.n||'them')+' · F to get out');}
+function netRideOn(R){const S=netFreeSeat(R);if(!S){toast('No free seat');return;}if(WP.eq)wpSnapHolster();try{melStow();}catch(e){}
+  NET.ride={id:R.id,seat:S.name,seq:netEnterSeq(R.car,S)};toast('Riding with '+(R.pr.n||'them')+' · F to get out');}
+/* ---- getting in: to the door, open it, in and sit, and pull it shut (the front passenger door; a back seat: to it and in) ---- */
+function netEnterSeq(v,S){const it=ME.it,P=it.pl;v.node.updateMatrixWorld(true);
+  const r=S.name==='passenger'?carRig(v,'R'):null,pos=toL(v,new THREE.Vector3(P.x,v.node.position.y,P.z));pos.y=0;
+  const rot=wrapA(P.psi-v.node.rotation.y);let stand,door,sL;
+  if(r&&!r.doorGone){const hL=toL(v,handleW(r));hL.y=0;sL=seatL(v,r);stand=new THREE.Vector3(hL.x-0.34,0,hL.z+r.sg*0.52);door=new THREE.Vector3(sL.x+0.04,0,hL.z+r.sg*0.36);}
+  else{sL=seatLocal(v,S).clone();const sg=sL.z<0?-1:1;
+    stand=new THREE.Vector3(sL.x-0.2,0,sL.z+sg*0.95);door=new THREE.Vector3(sL.x,0,sL.z+sg*0.45);}
+  return {ph:'walk',t:0,pos,from:pos.clone(),rot,rot0:rot,r:r&&!r.doorGone?r:null,S,stand,door,sL};}
+// sitting (k 0) or standing (k 1), and between
+function netSitPose(g,S,k){const N=g.userData.npc,fit=S.obj.userData.seatFit;N.seatFit=fit;let p=seatPose('sit',ME.t,N.recipe,fit);if(k>0)p=lerpP(p,PZ(),ezs(Math.min(1,k)));apply(N,p);}
+function netEnterStep(Q,v,dt){const it=ME.it,g=it.g,r=Q.r;Q.t+=dt;const next=ph=>{Q.ph=ph;Q.t=0;Q.from=Q.pos.clone();Q.rot0=Q.rot;};
+  if(Q.ph==='walk'){const D=Q.D||(Q.D=clamp(Q.from.distanceTo(Q.stand)/1.5,0.25,2.6)),u=Math.min(1,Q.t/D);
+    Q.pos.copy(Q.from).lerp(Q.stand,ezs(u));const dir=Q.stand.clone().sub(Q.from),face=dir.length()>0.3?Math.atan2(-dir.z,dir.x):Q.rot0;
+    const look=r?toL(v,handleW(r)):Q.sL.clone();look.y=0;const end=faceTo({pos:Q.stand},look);
+    Q.rot=Q.rot0+wrapA((u<0.75?face:end)-Q.rot0)*Math.min(1,u<0.75?u*4:1);npcPose(g,ME.t,u<0.92&&D>0.4?0.9:0,dt);bodyAt(it,v,Q.pos,Q.rot);
+    if(u>=1){Q.rot=end;next(r?'open':'sit');}return;}
+  if(Q.ph==='open'){const hW=handleW(r),hL=toL(v,hW);hL.y=0;Q.rot+=clamp(wrapA(faceTo(Q,hL)-Q.rot),-7*dt,7*dt);npcPose(g,ME.t,0,dt);bodyAt(it,v,Q.pos,Q.rot);
+    const wk=ezs(Q.t/0.3);if(!Q.pulled&&Q.t>=0.3){Q.pulled=true;togglePart(r.door,true);}
+    const f=Q.pulled?doorFrac(r):0;armTo(g,r.hand,hW,f<0.7?wk:Math.max(0,1-(f-0.7)/0.12));
+    if(f>0.82||Q.t>1.4)next('sit');return;}
+  if(Q.ph==='sit'){const u=Math.min(1,Q.t/0.85);Q.pos.copy(bez(Q.from,Q.door,Q.sL,ezs(u)));Q.pos.y=lerp(0,Q.sL.y,ezs((u-0.35)/0.65));
+    Q.rot=Q.rot0+wrapA(0-Q.rot0)*ezs(u/0.7);netSitPose(g,Q.S,1-ezs((u-0.2)/0.7));bodyAt(it,v,Q.pos,Q.rot);
+    if(u>=1){Q.rot=0;if(r)next('reachIn');else return true;}return;}
+  if(Q.ph==='reachIn'){Q.pos.copy(Q.sL);const u=Math.min(1,Q.t/0.3);netSitPose(g,Q.S,0);bodyAt(it,v,Q.pos,0);armTo(g,r.hand,pullW(r),ezs(u),armPole(r));
+    if(u>=1){togglePart(r.door,false);next('close');}return;}
+  if(Q.ph==='close'){Q.pos.copy(Q.sL);netSitPose(g,Q.S,0);bodyAt(it,v,Q.pos,0);const f=doorFrac(r);if(f>0.02)armTo(g,r.hand,pullW(r),1,armPole(r));
+    if(f<=0.02||Q.t>1.4)return true;return;}
+  return true;}
 function netRideOff(){const r=NET.ride;NET.ride=null;if(!ME.it)return;const R=r&&NET.rem.get(r.id),P=ME.it.pl;ME.it.g.position.set(0,0,0);ME.it.g.rotation.set(0,0,0);
   if(R&&R.car){const v=R.car,psi=v.node.rotation.y,s=/L$|driver/.test(r.seat)?-1:1;P.x=v.node.position.x+Math.sin(psi)*s*(1.6)*1;P.z=v.node.position.z+Math.cos(psi)*s*1.6;}
   P.y=groundAt(P.x,P.z,P.y+2).y;P.vy=0;place();}
 function netRideStep(dt){const r=NET.ride,R=NET.rem.get(r.id);if(!R||!R.car||!R.pr||!R.pr.c){netRideOff();return false;}const it=ME.it,v=R.car,S=(v.m.seats||[]).find(q=>q.name===r.seat);if(!S){netRideOff();return false;}
+  if(r.seq){let done=false;try{done=netEnterStep(r.seq,v,dt);}catch(e){console.warn('enter',e);done=true;}if(!done)return true;r.seq=null;}
   v.node.updateMatrixWorld(true);const P=it.pl;P.x=v.node.position.x;P.z=v.node.position.z;P.y=v.node.position.y;P.psi=v.node.rotation.y;
   it.node.position.copy(v.node.position);it.node.rotation.set(0,P.psi,0);const p=seatLocal(v,S);it.g.position.copy(p);it.g.rotation.set(0,0,0);
   const N=it.g.userData.npc,fit=S.obj.userData.seatFit;N.seatFit=fit;try{apply(N,seatPose('sit',ME.t,N.recipe,fit));}catch(e){}return true;}
@@ -18303,9 +18358,117 @@ function netTagsStep(){if(!NET.tags){NET.tags=document.createElement('div');NET.
 function netHud(){let h=g$('gnet');if(!h){h=document.createElement('div');h.id='gnet';(g$('ghud')||document.body).appendChild(h);}
   const L=NET.peers;h.innerHTML='<b>'+NET_SERVERS[0].name+'</b> · '+(L.length+1)+' / '+NET_MAX+'<br>'+[NET.name+' (you)',...L.map(p=>String(p.pr.n||'?'))].map(s=>s.replace(/[<>&]/g,'')).join('<br>');}
 function netStep(dt){if(!NET.on){if(NET.want&&ME.it)netStart();return;}if(!NET.room)return;
-  try{netRemStep(dt);netJackStep(dt);netHoldStep();netSend(dt);netTagsStep();}catch(e){console.warn('net',e);}
+  try{netRemStep(dt);nwFrame(dt);netJackStep(dt);netHoldStep();netSend(dt);netTagsStep();}catch(e){console.warn('net',e);}
   NET.hudT=(NET.hudT||0)-dt;if(NET.hudT<=0){NET.hudT=1;netHud();}
   if(NET.acct&&NET.dirty){NET.saveT-=dt;if(NET.saveT<=0){NET.saveT=20;acctPush();}}}
+
+/* =====================================================================
+   ONE WORLD: everyone on the server sees the same traffic, police, people and parked cars.
+   Each game fills the streets nearest its own player (the traffic and the people both: a spot nearer another
+   player is left to that player's game), keeps driving what is near anyone, and sends what is near the others five
+   times a second on the world channel. What the others send is shown here as puppets, moved by the network and
+   never driven by this game. The patrols (and the station's bays) belong to one game, the host (the first to join);
+   a chase belongs to the game of the player being chased. The parked cars along the streets come from the same
+   numbers in every game, and one that someone takes is gone for everybody.
+   ===================================================================== */
+const NW={rtr:new Map(),rped:new Map(),rpc:new Map(),sendT:0,pkGone:new Set(),pkOther:new Set(),host:true,hostId:null,eb:null,cops:[],xT:0};
+const _w1=v=>Math.round(v*10)/10,_w2=v=>Math.round(v*100)/100;
+// distance from a point to the nearest other player (1e9 offline)
+function nwNear(x,z,O){let d=1e9;for(const s of O)d=Math.min(d,Math.hypot(x-s[0],z-s[1]));return d;}
+function nwOthers(){return (NET.on&&window.BAY_NETP)||[];}
+// another player is nearer this spot than I am: their game fills it
+function nwCloserOther(x,z){const O=nwOthers();if(!O.length||!ME.it)return false;const H=pedHere(),dm=Math.hypot(x-H.x,z-H.z);return O.some(s=>Math.hypot(x-s[0],z-s[1])<dm);}
+// how far a point is from anyone (me or the others)
+function nwMinD(x,z,mine){const O=nwOthers();return O.length?Math.min(mine,nwNear(x,z,O)):mine;}
+// the others' people near a point (they count toward how busy the sidewalks are here)
+function nwPedNear(H,r){let n=0;for(const R of NW.rped.values())if(R.node&&Math.hypot(R.x-H.x,R.z-H.z)<r)n++;return n;}
+function nwExtra(){const L=[];for(const R of NET.rem.values())if(R.car&&R.car.ph&&R.pr&&R.pr.c)L.push(R.car.ph);for(const R of NW.rpc.values())if(R.v&&R.v.ph)L.push(R.v.ph);return L;}
+
+/* ---- what I send: my traffic, my police and my people that are near someone else ---- */
+function nwPack(){const O=nwOthers();if(!O.length)return null;const tr=[],cp=[],pd=[];
+  for(const a of TR.cars()){if(!a.alive||a.remote||!a.tpl||!a.tpl.key||a.parkSpot!=null)continue;const d=nwNear(a.x,a.z,O);
+    const sp=_w1(a.sim==='kin'?(a.vk||0):(a.u||0)),base=[a.id,a.tpl.key,'',_w1(a.x),_w2(a.y||0),_w1(a.z),_w2(a.psi),sp,0,_w2(a.gy||0)];
+    if(a.unit){if(a.unit.st==='parked'||d>420)continue;const P=a.pd;base[2]=a.unitText||'';
+      base[8]=(P&&P.lights?1:0)|(P&&P.lights&&P.siren&&P.role!=='dead'&&P.role!=='hold'?2:0)|(a.in&&a.in.brk>0.3?4:0)|(a.burnt?16:0)|(a.hazard?32:0);cp.push([d,base]);continue;}
+    if(d>330||a.fade<=0)continue;base[2]=a.paintHex||'';
+    base[8]=(a.sigL?1:0)|(a.sigR?2:0)|(a.hazard?4:0)|(a.in&&a.in.brk>0.3?8:0)|(a.burnt?16:0)|(a.parked?64:0);tr.push([d,base]);}
+  for(const p of PEDS){const d=nwNear(p.x,p.z,O);if(d>220)continue;
+    pd.push([d,[p.id,p.cop?(p.k|0):p.ri,_w1(p.x),_w2(p.y),_w1(p.z),_w2(p.psi),_w2(p.mode==='rag'?0:(npcState(p.g).v||0)),(p.dead?1:0)|(p.mode==='rag'?2:0)|(p.cop?4:0)|(p.mode==='cower'||p.mode==='handsup'?8:0)]]);}
+  const by=(L,n)=>L.sort((p,q)=>p[0]-q[0]).slice(0,n).map(q=>q[1]);
+  const o={tr:by(tr,36),cp:by(cp,12),pd:by(pd,36)};
+  // the host keeps the station: which bays are empty (their cars are out), so the others don't show a car there
+  if(NW.host){const S=TR.pd.station();if(S&&S.bays)o.eb=S.bays.map((b,i)=>b.unit?-1:i).filter(i=>i>=0);}
+  return o;}
+
+/* ---- what the others send ---- */
+function nwRecv(id,d){const now=performance.now();
+  const put=(map,key,e,s,mk)=>{let R=map.get(key);if(!R){R=mk();map.set(key,R);}const pv=R.buf[R.buf.length-1];
+    if(!pv||pv.s[0]!==s[0]||pv.s[2]!==s[2]||pv.s[3]!==s[3]){R.buf.push({t:now,s});if(R.buf.length>12)R.buf.shift();}R.e=e;R.seen=now;R.from=id;};
+  (Array.isArray(d.tr)?d.tr:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=10)put(NW.rtr,id+':'+e[0],e,[e[3],e[4],e[5],e[6],e[7],e[9]],()=>({buf:[],a:null,cop:false}));});
+  (Array.isArray(d.cp)?d.cp:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=10)put(NW.rtr,id+':c'+e[0],e,[e[3],e[4],e[5],e[6],e[7],e[9]],()=>({buf:[],a:null,cop:true}));});
+  (Array.isArray(d.pd)?d.pd:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=8)put(NW.rped,id+':'+e[0],e,[e[2],e[3],e[4],e[5],e[6]],()=>({buf:[],node:null,g:null,x:e[2],z:e[4]}));});
+  if(id===NW.hostId)NW.eb=Array.isArray(d.eb)?d.eb:null;}
+// where it was 200 ms ago (two samples either side), or a little on from the newest
+function nwSample(buf,now){if(!buf.length)return null;const t=now-220;let i=buf.length-1;while(i>0&&buf[i-1].t>t)i--;
+  if(i===0)return buf[0].s;const A=buf[i-1],B=buf[i];
+  if(t>=B.t){const k=Math.min(0.3,(t-B.t)/1000),dt0=(B.t-A.t)/1000||0.2;return B.s.map((v,j)=>j<3?v+(v-A.s[j])/dt0*k:v);}
+  const f=(t-A.t)/Math.max(1,B.t-A.t);return B.s.map((v,j)=>j===3?A.s[3]+wrapA(v-A.s[3])*f:A.s[j]+(v-A.s[j])*f);}
+
+/* ---- every frame: the puppets ---- */
+function nwFrame(dt){const now=performance.now();
+  // who's host: whoever joined first
+  {let best=NET.me,bt=NET.jt||0;for(const p of NET.peers){const j=+(p.pr&&p.pr.jt)||0;if(j&&(j<bt||(j===bt&&p.id<best))){bt=j;best=p.id;}}
+    NW.hostId=best;NW.host=best===NET.me;window.BAY_NETPATROL=NW.host;if(NW.host)NW.eb=null;}
+  // someone who was here before me: my cars and people round them go (the ones out of sight), theirs take over there
+  if(!NW.known)NW.known=new Set();
+  for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number'||NW.known.has(p.id))continue;NW.known.add(p.id);if(!(+pr.jt<(NET.jt||0)))continue;
+    for(const a of TR.cars().slice()){if(!a.alive||a.remote||a.unit||a.parkSpot!=null||a.parked)continue;if(Math.hypot(a.x-pr.x,a.z-pr.z)<420&&!TR.seen(a.x,a.z,3))TR.remove(a);}
+    for(const q of PEDS.slice()){if(q.cop||q.call||q.dead)continue;if(Math.hypot(q.x-pr.x,q.z-pr.z)<260&&!TR.seen(q.x,q.z,1.5))pedRemove(q);}}
+  // where the others are, for the traffic and the people
+  const O=[];for(const p of NET.peers){const pr=p.pr;if(pr&&typeof pr.x==='number')O.push([pr.x,pr.z]);}window.BAY_NETP=O;
+  // parked cars someone else has taken
+  NW.pkOther.clear();for(const p of NET.peers){const L=p.pr&&p.pr.pk;if(Array.isArray(L))L.forEach(i=>NW.pkOther.add(i|0));}
+  // the cars: traffic and police
+  const cops=[];
+  for(const [key,R] of NW.rtr){if(now-R.seen>1500){if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.delete(key);continue;}
+    const e=R.e,s=nwSample(R.buf,now);if(!s)continue;
+    if(!R.a||!R.a.alive){if(R.bad)continue;R.a=TR.remoteCar.make(e[1],R.cop?null:e[2],s[0],s[1],s[2],s[3],R.cop?e[2]:null);if(!R.a){R.bad=true;continue;}}
+    const a=R.a,fl=e[8]|0;a.x=s[0];a.y=s[1];a.z=s[2];a.psi=s[3];a.u=s[4];a.vk=Math.abs(s[4]);a.v=0;a.yr=0;a.gy=s[5]||0;a.omega=a.u/(a.r||0.33);a.omegaF=a.omega;a.alpha=1;a.fade=1;
+    const brk=R.cop?(fl&4):(fl&8);a.in.brk=brk?1:0;a.brk=a.in.brk;a.in.thr=brk?0:0.3;
+    if(R.cop){a.netL=!!(fl&1);a.netS=!!(fl&2);a.hazard=!!(fl&32);cops.push(a);}else{a.sigL=!!(fl&1);a.sigR=!!(fl&2);a.hazard=!!(fl&4);}
+    if((fl&16)&&!a.burnt)a.burnt=true;}
+  NW.cops=cops;window.BAY_NETCOPS=cops;
+  // the station: the host's empty bays have no car here either
+  {const eb=NW.host?null:NW.eb;const S=TR.pd.station();for(const u of TR.pd.units()){const bi=S&&u.bay?S.bays.indexOf(u.bay):-1;u.a.netHide=!!(eb&&u.st==='parked'&&bi>=0&&eb.includes(bi));}}
+  // the people
+  const cp=camera.position;
+  for(const [key,R] of NW.rped){if(now-R.seen>1500){nwPedDrop(R);NW.rped.delete(key);continue;}
+    const e=R.e,s=nwSample(R.buf,now);if(!s)continue;const cop=!!(e[7]&4),ri=e[1]|0;
+    if(!R.node||R.ri!==ri||R.cop!==cop){nwPedDrop(R);try{const b=cop?copBuild(ri,true):(()=>{const g=buildNPC(NPCS[ri%NPCS.length]||NPCS[0]);mergeRig(g);const node=new THREE.Group();node.add(g);return {g,node};})();
+        R.g=b.g;R.node=b.node;R.ri=ri;R.cop=cop;R.g.traverse(o=>{if(o.isMesh)o.castShadow=true;});scene.add(R.node);}catch(x){R.node=null;continue;}}
+    R.x=s[0];R.z=s[2];R.node.position.set(s[0],s[1],s[2]);R.node.rotation.set(0,s[3],0);const g=R.g,down=e[7]&3;
+    if(down){if(!R.down){R.down=true;g.position.set(0,0.12,0);g.rotation.set(0,0,Math.PI/2);try{apply(g.userData.npc,PZ());}catch(x){}}continue;}
+    if(R.down){R.down=false;g.position.set(0,0,0);g.rotation.set(0,0,0);}
+    if(cp.distanceTo(R.node.position)<110)npcPose(g,ME.t+(ri%7),s[4]||0,dt);
+    if(e[7]&8){const N=g.userData.npc;g.updateMatrixWorld(true);armTo(g,'R',g.localToWorld(new THREE.Vector3(0.05,1.95,-0.25)),0.9);armTo(g,'L',g.localToWorld(new THREE.Vector3(0.05,1.95,0.25)),0.9);}}
+  // others' cars left parked (their own car, a car they got out of)
+  const seen=new Set();for(const p of NET.peers){const L=p.pr&&p.pr.pc;if(!Array.isArray(L))continue;
+    L.forEach((c,i)=>{if(!Array.isArray(c)||c.length<6)return;const key=p.id+':'+i+':'+c[0]+'|'+c[1];seen.add(key);let R=NW.rpc.get(key);
+      if(!R){const v=buildVehicle(c[0],c[1]);if(!v)return;v.alive=true;v.remote=p.id;scene.add(v.node);R={v};NW.rpc.set(key,R);}
+      const v=R.v;v.ph.x=c[2];v.ph.z=c[4];v.ph.psi=c[5];v.ph.u=0;v.ph.v=0;v.node.position.set(c[2],c[3],c[4]);v.node.rotation.set(0,c[5],0,'YXZ');});}
+  for(const [key,R] of NW.rpc)if(!seen.has(key)){scene.remove(R.v.node);NW.rpc.delete(key);}
+  // the cars traffic has to see: the others' cars too
+  NW.xT-=dt;if(NW.xT<=0){NW.xT=0.5;try{refreshExtra();}catch(x){}}
+  // and mine, to them
+  NW.sendT-=dt;if(NW.sendT<=0){NW.sendT=0.2;const o=nwPack();if(o&&NET.room&&NET.room.world)NET.room.world(o);}}
+function nwPedDrop(R){if(R.node)scene.remove(R.node);if(R.g){R.g.position.set(0,0,0);R.g.rotation.set(0,0,0);}R.node=null;R.g=null;R.down=false;}
+function nwClear(){for(const R of NW.rtr.values())if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.clear();for(const R of NW.rped.values())nwPedDrop(R);NW.rped.clear();
+  for(const R of NW.rpc.values())scene.remove(R.v.node);NW.rpc.clear();NW.cops=[];window.BAY_NETCOPS=[];window.BAY_NETP=null;window.BAY_NETPATROL=undefined;NW.eb=null;NW.known=null;NW.pkOther.clear();
+  try{for(const u of TR.pd.units())u.a.netHide=false;}catch(e){}try{refreshExtra();}catch(e){}}
+// my own cars standing about (not the one I'm driving), for the others
+function nwParkedMine(){const O=nwOthers();if(!O.length)return null;const L=[];
+  for(const v of CARS){if(!v.alive||v===DRIVE||!v.ph||v.remote)continue;if(nwNear(v.ph.x,v.ph.z,O)>300)continue;L.push([v.key,v.color,_w1(v.ph.x),_w2(v.node.position.y),_w1(v.ph.z),_w2(v.ph.psi)]);if(L.length>=6)break;}
+  return L.length?L:null;}
 
 /* ===========================================================================
    THE MAP AND GPS. M opens the full map (the game pauses): drag to move, scroll to zoom, click a spot to set a
@@ -19162,10 +19325,13 @@ function wLights(dt){const cam=camera,dark=wDark(),E=window.BAY_EMERG||(window.B
     const dc=Math.hypot(a.x-cam.position.x,a.z-cam.position.z);let lv=null;
     if((on||a._lon)&&dc<800){try{lv=TR.pd.lights(a,on,P&&(P.held||u.foot||P.role==='hold'||P.role==='dead'),cam,renderer,Math.max(0.12,dark));}catch(e){}a._lon=on;}
     if(on&&P.siren&&!u.out&&!u.foot&&P.role!=='dead'&&P.role!=='hold'&&!(P.role==='stop'&&P.held))sir.push(a);if(on&&lv&&dc<170)near.push([dc,a,lv]);}
+  // online: the others' police cars, their bars and sirens as their games have them
+  for(const a of (window.BAY_NETCOPS||[])){if(!a.alive)continue;const on=!!a.netL,dc=Math.hypot(a.x-cam.position.x,a.z-cam.position.z);let lv=null;
+    if((on||a._lon)&&dc<800){try{lv=TR.remoteCar.lights(a,on,cam,renderer,Math.max(0.12,dark));}catch(e){}a._lon=on;}if(on&&a.netS)sir.push(a);if(on&&lv&&dc<170)near.push([dc,a,lv]);}
   near.sort((p,q)=>p[0]-q[0]);const kI=0.8+dark*2.8;
   for(const [,a,lv] of near.slice(0,4)){const c=Math.cos(a.psi),s=Math.sin(a.psi),y=(a.y||0)+1.85;
     E.push({x:a.x-s*0.5,y,z:a.z-c*0.5,r:0.18,g:0.32,b:1,w:kI*(lv.b||0)});E.push({x:a.x+s*0.5,y,z:a.z+c*0.5,r:1,g:0.12,b:0.06,w:kI*(lv.r||0)});}
-  TR.pd.sirens(TR.pd.units().map(u=>u.a).filter(a=>a.alive&&a.pd&&a.pd.lights&&a.pd.role!=='dead'&&a.pd.role!=='hold'));sirenAudio(sir,dt);}
+  TR.pd.sirens(TR.pd.units().map(u=>u.a).filter(a=>a.alive&&a.pd&&a.pd.lights&&a.pd.role!=='dead'&&a.pd.role!=='hold').concat((window.BAY_NETCOPS||[]).filter(a=>a.alive&&a.netS)));sirenAudio(sir,dt);}
 function sirenVoice(){const c=DAC;const o1=c.createOscillator(),o2=c.createOscillator(),sh=c.createWaveShaper(),bp=c.createBiquadFilter(),g=c.createGain(),pan=c.createPanner();
   o1.type='sawtooth';o2.type='square';const cv=new Float32Array(256);for(let i=0;i<256;i++){const x=i/128-1;cv[i]=Math.tanh(x*2.2);}sh.curve=cv;
   bp.type='lowpass';bp.frequency.value=3200;bp.Q.value=0.8;const g2=c.createGain();g2.gain.value=0.5;
@@ -20178,7 +20344,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,hitV:hitVehicle,NET,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={scene:()=>scene,hitV:hitVehicle,NET,NW,PARK,nwPack,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
