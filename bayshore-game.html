@@ -10734,7 +10734,7 @@ function trOccH(x,yTop,z){const C=TRCAM.position,cx=C.x,cy=C.y,cz=C.z,dx=x-cx,dz
     for(const b of RN.bld.near(px,pz)){if(!(b.h>ly))continue;const c=Math.cos(b.rot||0),s=Math.sin(b.rot||0),lx=(px-b.x)*c-(pz-b.z)*s,lz=(px-b.x)*s+(pz-b.z)*c;
       if(Math.abs(lx)<b.w/2-0.5&&Math.abs(lz)<b.d/2-0.5)return true;}}return false;}
 function trOccStep(cars){if(!OCC.on||window.PHOTO_ON||!cars.length)return;const n=cars.length,per=Math.max(4,Math.ceil(n/5));
-  for(let k=0;k<per&&k<n;k++){const a=cars[(OCC.i+k)%n];if(!a.alive||!a.root)continue;a.occ=trOccH(a.x,(a.y||0)+2.2,a.z);}
+  for(let k=0;k<per&&k<n;k++){const a=cars[(OCC.i+k)%n];if(!a.alive||!a.root)continue;a.occl=trOccH(a.x,(a.y||0)+2.2,a.z);}
   OCC.i=(OCC.i+per)%n;}
 
 /* ======================= ported from Back Roads (traffic.js), with the Bayshore patches from mkport.py ======================= */
@@ -11326,7 +11326,7 @@ function trSync(a,dt,force){
   {let pit=0;if(a.sim==='kin'&&a.path.length>2){const f=trAt(a,a.s+1.4),r=trAt(a,a.s-1.4);pit=Math.atan2((f.y||0)-(r.y||0),2.8);}else if(a.gy!=null)pit=a.gy;
    const k=dt?Math.min(1,dt*12):1;const yt=(a.y||0)+(a.sim==='kin'?0.06:0);if(a.vy_==null||!dt){a.vyo=0;a.vy_=yt;a.vp_=pit;}else{const j=yt-(a.ytp==null?yt:a.ytp);if(Math.abs(j)>Math.max(0.12,3*dt))a.vyo-=j;a.vyo*=Math.exp(-dt*6);a.vy_=yt+a.vyo;a.vp_+=(pit-a.vp_)*Math.min(1,dt*18);}a.ytp=yt;root.position.y=a.vy_;root.rotation.z=a.vp_;}
   const full=a.alpha>=1&&dc<(a.unit?(a.parked||a.unit.st==='parked'?Math.min(30,+CFG.gfx.trDetail||85):Math.min(55,+CFG.gfx.trDetail||85)):(+CFG.gfx.trDetail||85));
-  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700))&&!(a.occ&&!window.PHOTO_ON);if(root.visible!==shown)root.visible=shown;
+  const shown=dc<(window.PHOTO_ON?2600:(+CFG.gfx.trDraw||700))&&!(a.occl&&!window.PHOTO_ON);if(root.visible!==shown)root.visible=shown;
   if(a.full.visible!==full||force){a.full.visible=full;a.prox.visible=!full;}
   if(!full){const op=a.alpha;a.proxM.forEach(m=>{const tr=op<0.999;if(m.transparent!==tr){m.transparent=tr;m.depthWrite=!tr;}m.opacity=op;});}
   else if(dc<60&&a.sim==='phys'&&!a.parked){const P=car;car=a;try{stepSusp(Math.max(dt,0.001));}finally{car=P;}
