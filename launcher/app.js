@@ -16,6 +16,11 @@ app.commandLine.appendSwitch('num-raster-threads',String(Math.max(2,Math.min(8,o
 app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('enable-features','SharedArrayBuffer,CanvasOopRasterization');
 app.commandLine.appendSwitch('js-flags','--max-old-space-size=4096');
+// no location, casting or network probing: on Windows 11 24H2 any Wi-Fi query (Chromium's cast discovery, its network
+// quality probe) brings up a "let this app use your location" prompt, and the game needs none of it
+app.commandLine.appendSwitch('disable-features','MediaRouter,DialMediaRouteProvider,CastMediaRouteProvider,GlobalMediaControls,WinrtGeolocationImplementation,NetworkQualityEstimatorWebHoldback');
+app.commandLine.appendSwitch('disable-background-networking');
+app.commandLine.appendSwitch('force-effective-connection-type','4G');
 protocol.registerSchemesAsPrivileged([{scheme:'app',privileges:{standard:true,secure:true,supportFetchAPI:true,corsEnabled:true,stream:true}}]);
 
 const HOME=global.BAYSHORE_APPDIR||__dirname;
@@ -64,6 +69,10 @@ async function checkUpdate(win){
 // the three.js files the page loads from CDNs are shipped inside the app too, so it plays offline
 const LIBS=[[/^https:\/\/cdnjs\.cloudflare\.com\/ajax\/libs\/three\.js\/r128\/three\.min\.js/,'/lib/three.min.js'],[/^https:\/\/cdn\.jsdelivr\.net\/npm\/three@0\.128\.0\/(examples\/js\/.+\.js)/,'/lib/$1']];
 function serve(){const {session}=require('electron');
+  // only what the game uses (sound, fullscreen, pointer lock); everything else (geolocation, camera, notifications...) refused without asking
+  const OK=new Set(['pointerLock','fullscreen','clipboard-sanitized-write','speaker-selection']);
+  session.defaultSession.setPermissionRequestHandler((wc,perm,cb)=>cb(OK.has(perm)));
+  session.defaultSession.setPermissionCheckHandler((wc,perm)=>OK.has(perm));
   session.defaultSession.webRequest.onBeforeRequest({urls:['https://cdnjs.cloudflare.com/*','https://cdn.jsdelivr.net/*']},(d,cb)=>{for(const [re,to] of LIBS){const m=d.url.match(re);if(m){const local=to.replace('$1',m[1]||'');if(fs.existsSync(path.join(HOME,'game',local)))return cb({redirectURL:'app://bayshore'+local});}}cb({});});
   protocol.handle('app',async req=>{const u=new URL(req.url);let p=decodeURIComponent(u.pathname);if(p==='/'||p==='')p='/bayshore-game.html';
     const cur=current();let file=p==='/bayshore-game.html'?cur.file:p.startsWith('/lib/')?path.join(HOME,'game',p):path.join(DATA(),p);
@@ -74,6 +83,7 @@ function serve(){const {session}=require('electron');
     return new Response(body,{headers:{'content-type':type,'Cross-Origin-Opener-Policy':'same-origin','Cross-Origin-Embedder-Policy':'credentialless','Cross-Origin-Resource-Policy':'cross-origin','Cache-Control':'no-store'}});});}
 
 ipcMain.handle('bayshore-info',()=>({app:'desktop',version:status.version,launcher:(readJSON(path.join(__dirname,'launcher.json'))||{}).version||app.getVersion(),cores:os.cpus().length,update:status.update,source:status.source}));
+ipcMain.handle('bayshore-restart',()=>{app.relaunch();app.exit(0);});
 ipcMain.handle('bayshore-save',async(e,{filename,data})=>{const w=BrowserWindow.fromWebContents(e.sender);const r=await dialog.showSaveDialog(w,{defaultPath:path.join(app.getPath('pictures'),filename)});
   if(r.canceled||!r.filePath)return {status:'declined'};fs.writeFileSync(r.filePath,Buffer.from(data));return {status:'saved'};});
 
@@ -88,8 +98,8 @@ async function start(){serve();
   if(process.env.BAYSHORE_SELFTEST){win.webContents.on('console-message',(e,l,m)=>{if(/error/i.test(m))console.log('[page]',m.slice(0,200));});setTimeout(async()=>{if(process.env.BAYSHORE_SELFTEST_JS){try{const r=await win.webContents.executeJavaScript(fs.readFileSync(process.env.BAYSHORE_SELFTEST_JS,'utf8'));console.log('SELFTEST',r);}catch(e){console.log('SELFTEST ERR',e.message);}app.quit();return;}try{const r=await win.webContents.executeJavaScript('JSON.stringify({iso:self.crossOriginIsolated,sab:typeof SharedArrayBuffer,native:!!window.BAYSHORE_NATIVE,cores:window.BAYSHORE_NATIVE&&BAYSHORE_NATIVE.cores,three:!!window.THREE,sky:!!(window.THREE&&THREE.Sky),bayg:!!window.BAYG,ld:(document.getElementById("ldStep")||{}).textContent})');console.log('SELFTEST',r,JSON.stringify(status));}catch(e){console.log('SELFTEST ERR',e.message);}app.quit();},+process.env.BAYSHORE_SELFTEST);}win.once('ready-to-show',()=>win.show());
   win.webContents.setWindowOpenHandler(({url})=>{shell.openExternal(url);return {action:'deny'};});
   win.webContents.on('before-input-event',(e,i)=>{if(i.type==='keyDown'&&i.key==='F11'){win.setFullScreen(!win.isFullScreen());e.preventDefault();}});
-  // while playing: look again every 20 minutes; a new build is used the next time the game starts
-  setInterval(async()=>{const v=await checkUpdate(null);if(v)win.webContents.executeJavaScript(`window.BAYSHORE_UPDATE&&BAYSHORE_UPDATE('Update ${v} downloaded: it loads next time you start Bayshore')`).catch(()=>{});},20*60*1000);}
+  // while playing: look again every 10 minutes; a new build is used the next time the game starts
+  setInterval(async()=>{const v=await checkUpdate(null);if(v)win.webContents.executeJavaScript(`window.BAYSHORE_UPDATE_READY?BAYSHORE_UPDATE_READY('${v}'):window.BAYSHORE_UPDATE&&BAYSHORE_UPDATE('Update ${v} downloaded: it loads next time you start Bayshore')`).catch(()=>{});},10*60*1000);}
 
 app.whenReady().then(start);
 app.on('window-all-closed',()=>app.quit());
