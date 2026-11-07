@@ -11252,7 +11252,11 @@ const _ca=new Float64Array(6),_cb=new Float64Array(6);
 function trLotPass(A,B){const ua=A.unit,ub=B.unit;if(!ua||!ub)return false;
   const P=ub.st==='parked'&&ub.bay?ub:ua.st==='parked'&&ua.bay?ua:null;if(!P)return false;const M=P===ub?ua:ub;if(M.st==='parked')return false;
   const S=P.home;return !!S&&Math.hypot(M.a.x-P.a.x,M.a.z-P.a.z)<12&&M.home===S;}
-function trPair(A,B){if(trLotPass(A,B))return 0;if(Math.abs((A.y||0)-(B.y||0))>3)return 0;
+function trPair(A,B){if(!(A.remote||B.remote))return trPair0(A,B);if(A.remote&&B.remote)return 0;
+  const R=A.remote?A:B,s0={x:R.x,z:R.z,u:R.u||0,v:R.v||0,yr:R.yr||0},c=Math.cos(R.psi),sn=Math.sin(R.psi),vx0=s0.u*c-s0.v*sn,vz0=-s0.u*sn-s0.v*c;
+  const imp=trPair0(A,B);if(imp>0){const vx=R.u*c-(R.v||0)*sn,vz=-R.u*sn-(R.v||0)*c;R.nwDx=(R.nwDx||0)+vx-vx0;R.nwDz=(R.nwDz||0)+vz-vz0;}
+  R.x=s0.x;R.z=s0.z;R.u=s0.u;R.v=s0.v;R.yr=s0.yr;return imp;}
+function trPair0(A,B){if(trLotPass(A,B))return 0;if(Math.abs((A.y||0)-(B.y||0))>3)return 0;
   const dx=A.x-B.x,dz=A.z-B.z,rr=A.halfLen+B.halfLen+0.3;if(dx*dx+dz*dz>rr*rr)return 0;
   trCircles(A,_ca);trCircles(B,_cb);const ra=A.halfWid,rb=B.halfWid;let impact=0;
   const ia=1/A.m,ib=1/B.m,it=ia+ib;
@@ -18157,7 +18161,7 @@ function mqConn(url,o){// o: {will:[topic], subs:[topics], onMsg(topic,bytes), o
 /* ---- a server: everyone's state on <base>/p/<id> ---- */
 function netRoom(code,listenOnly){const base=NET_V+code+'/p/',wb=NET_V+code+'/w/',me=_rnd(12),myT=base+me,sess=_rnd(6);let wq=0;const wsubs=[],wlast={};
   let mine={},seq=0,closed=false,subs=[],beat=null,prune=null,lastPub=0;const map={},conns=[];
-  const emit=()=>{const L=Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr,seen:map[id].seen}));subs.forEach(f=>{try{f(L);}catch(e){}});};
+  const emit=()=>{const L=Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr,seen:map[id].seen,t:map[id].t}));subs.forEach(f=>{try{f(L);}catch(e){}});};
   const onMsg=(topic,pl)=>{
     // the world channel: each game's traffic, police and people near the others (not kept on the relay)
     if(topic.indexOf(wb)===0){const id=topic.slice(wb.length);if(!id||id===me||id.length>20||!pl.length)return;let d;try{d=JSON.parse(_TD.decode(pl));}catch(e){return;}
@@ -18170,7 +18174,7 @@ function netRoom(code,listenOnly){const base=NET_V+code+'/p/',wb=NET_V+code+'/w/
   const send=()=>{if(listenOnly)return;seq++;lastPub=Date.now();const pl=_TE.encode(JSON.stringify({q:seq,s:sess,t:Date.now(),p:mine}));conns.forEach(C=>C.pub(myT,pl,true));};
   const room={me,
     set(p){mine=p;send();},
-    world(o){if(listenOnly)return;o.q=++wq;o.s=sess;const pl=_TE.encode(JSON.stringify(o));NW.txB=pl.length;conns.forEach(C=>{if(!C.pub(wb+me,pl,false))NW.txFail=(NW.txFail||0)+1;});},
+    world(o){if(listenOnly)return;o.q=++wq;o.s=sess;o.t=Date.now();const pl=_TE.encode(JSON.stringify(o));NW.txB=pl.length;conns.forEach(C=>{if(!C.pub(wb+me,pl,false))NW.txFail=(NW.txFail||0)+1;});},
     onWorld(f){wsubs.push(f);},
     onPeers(f){subs.push(f);},
     peers(){return Object.keys(map).filter(id=>id!==me&&map[id].pr).map(id=>({id,pr:map[id].pr}));},
@@ -18295,8 +18299,11 @@ const _nq=new THREE.Vector3();
 function netRemStep(dt){const seen=new Set(),aud=[];
   for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number')continue;seen.add(p.id);const R=netRem(p.id);R.pr=pr;netRemBody(R,(pr.ri|0)%Math.max(1,NPCS.length));const g=R.g;
     // in their own car: placed, then posed by the game's own car code (suspension, wheels, steering, lights, brake lights, doors)
-    if(pr.c&&typeof pr.c.x==='number'){const v=netRemCar(R,pr.c);if(v){const C=v.cur;const k=Math.min(1,dt*10);C.x+=(pr.c.x+(pr.c.vx||0)*0.1-C.x)*k;C.z+=(pr.c.z+(pr.c.vz||0)*0.1-C.z)*k;C.y+=(pr.c.y-C.y)*k;C.h+=wrapA(pr.c.h-C.h)*k;
-        if(Math.hypot(pr.c.x-C.x,pr.c.z-C.z)>25){C.x=pr.c.x;C.z=pr.c.z;}
+    // their snapshots, by their clock (a car's and a person's kept apart: getting in or out starts afresh)
+    const kind=pr.c&&typeof pr.c.x==='number'?'c':'f';if(R.kind!==kind){R.kind=kind;R.pb=[];}
+    if(pr!==R.lastPr){R.lastPr=pr;const t=nwClk('p'+p.id,p.t);nwPush(R.pb,t,kind==='c'?[pr.c.x,pr.c.y,pr.c.z,pr.c.h,pr.c.vx||0,pr.c.vz||0]:[pr.x,pr.y||0,pr.z,pr.h||0,pr.g||0]);}
+    if(R.kind0!==kind){R.kind0=kind;R.vs=null;}const smp=nwSmooth(R,nwInterp(R.pb,Date.now()-170,kind==='c'?(q=>[q[4],q[5]]):nwVelPed),dt);
+    if(kind==='c'){const v=netRemCar(R,pr.c);if(v&&smp){const C=v.cur;C.x=smp[0];C.y=smp[1];C.z=smp[2];C.h=smp[3];
         const ph=v.ph,cp=Math.cos(C.h),sp=Math.sin(C.h),vx=pr.c.vx||0,vz=pr.c.vz||0,uf=vx*cp-vz*sp;
         let ok=false;if(ph){ph.x=C.x;ph.z=C.z;ph.psi=C.h;ph.u=uf;ph.v=0;ph.yr=0;ph.omega=uf/0.33;ph.omegaF=ph.omega;ph.steer=pr.c.st||0;ph.brk=pr.c.b||0;ph.hand=0;ph.rpm=pr.c.rpm||900;ph.load=pr.c.ld||0;
           try{v.y=carY(C.x,C.z,C.y);}catch(e){v.y=C.y;}v.pitT=pr.c.p||0;v.rolT=pr.c.r||0;v.lightsOn=!!pr.c.l;try{syncVehicle(v,dt);ok=true;}catch(e){}
@@ -18310,8 +18317,7 @@ function netRemStep(dt){const seen=new Set(),aud=[];
       // riding with someone (me, or another player)
       if(pr.sit){const host=pr.sit.id===NET.me?DRIVE:(NET.rem.get(pr.sit.id)||{}).car;if(host){netSeat(R,host,pr.sit.s,'sit');netHold(R,null);continue;}}
       // on foot
-      R.node.visible=true;const k=Math.min(1,dt*10);R.pos.x+=(pr.x-R.pos.x)*k;R.pos.y+=(pr.y-R.pos.y)*k;R.pos.z+=(pr.z-R.pos.z)*k;if(R.pos.distanceTo(_nq.set(pr.x,pr.y,pr.z))>20)R.pos.set(pr.x,pr.y,pr.z);
-      R.psi+=wrapA((pr.h||0)-R.psi)*k;R.node.position.copy(R.pos);R.node.rotation.set(0,R.psi,0);
+      R.node.visible=true;if(smp){R.pos.set(smp[0],smp[1],smp[2]);R.psi=smp[3];}else{R.pos.set(pr.x,pr.y||0,pr.z);R.psi=pr.h||0;}R.node.position.copy(R.pos);R.node.rotation.set(0,R.psi,0);
       // dead, or knocked down: on the ground
       if(pr.d||pr.rg){if(!R.down){R.down=true;netHold(R,null);g.position.set(0,0.12,0);g.rotation.set(0,0,Math.PI/2);try{apply(g.userData.npc,PZ());}catch(e){}}continue;}
       if(R.down){R.down=false;}g.position.set(0,0,0);g.rotation.set(0,0,0);
@@ -18434,7 +18440,7 @@ function netStep(dt){if(!NET.on){if(NET.want&&ME.it)netStart();return;}if(!NET.r
    a chase belongs to the game of the player being chased. The parked cars along the streets come from the same
    numbers in every game, and one that someone takes is gone for everybody.
    ===================================================================== */
-const NW={vid:0,rtr:new Map(),rped:new Map(),rpc:new Map(),sendT:0,pkGone:new Set(),pkOther:new Set(),host:true,hostId:null,eb:null,cops:[],xT:0};
+const NW={off:{},lastFrom:{},pedPool:new Map(),vid:0,rtr:new Map(),rped:new Map(),rpc:new Map(),sendT:0,pkGone:new Set(),pkOther:new Set(),host:true,hostId:null,eb:null,cops:[],xT:0};
 const _w1=v=>Math.round(v*10)/10,_w2=v=>Math.round(v*100)/100;
 // distance from a point to the nearest other player (1e9 offline)
 function nwNear(x,z,O){let d=1e9;for(const s of O)d=Math.min(d,Math.hypot(x-s[0],z-s[1]));return d;}
@@ -18468,17 +18474,33 @@ function nwPack(){const O=nwOthers();if(!O.length)return null;const tr=[],cp=[],
 
 /* ---- what the others send ---- */
 function nwRecv(id,d){const now=performance.now();NW.rx=(NW.rx||0)+1;NW.lastD=d;NW.lastId=id;if(Array.isArray(d.ev)){nwEvents(id,d.ev);return;}
-  const put=(map,key,e,s,mk)=>{let R=map.get(key);if(!R){R=mk();map.set(key,R);}const pv=R.buf[R.buf.length-1];
-    if(!pv||pv.s[0]!==s[0]||pv.s[2]!==s[2]||pv.s[3]!==s[3]){R.buf.push({t:now,s});if(R.buf.length>12)R.buf.shift();}R.e=e;R.seen=now;R.from=id;};
+  const tl=nwClk(id,d.t),wall=Date.now();NW.lastFrom[id]=wall;
+  const put=(map,key,e,s,mk)=>{let R=map.get(key);if(!R){R=mk();map.set(key,R);}nwPush(R.buf,tl,s);R.e=e;R.seen=wall;R.from=id;};
   (Array.isArray(d.tr)?d.tr:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=10)put(NW.rtr,id+':'+e[0],e,[e[3],e[4],e[5],e[6],e[7],e[9]],()=>({buf:[],a:null,cop:false}));});
   (Array.isArray(d.cp)?d.cp:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=10)put(NW.rtr,id+':c'+e[0],e,[e[3],e[4],e[5],e[6],e[7],e[9]],()=>({buf:[],a:null,cop:true}));});
   (Array.isArray(d.pd)?d.pd:[]).forEach(e=>{if(Array.isArray(e)&&e.length>=8)put(NW.rped,id+':'+e[0],e,[e[2],e[3],e[4],e[5],e[6]],()=>({buf:[],node:null,g:null,x:e[2],z:e[4]}));});
   if(id===NW.hostId)NW.eb=Array.isArray(d.eb)?d.eb:null;}
 // where it was 200 ms ago (two samples either side), or a little on from the newest
-function nwSample(buf,now){if(!buf.length)return null;const t=now-220;let i=buf.length-1;while(i>0&&buf[i-1].t>t)i--;
-  if(i===0)return buf[0].s;const A=buf[i-1],B=buf[i];
-  if(t>=B.t){const k=Math.min(0.3,(t-B.t)/1000),dt0=(B.t-A.t)/1000||0.2;return B.s.map((v,j)=>j<3?v+(v-A.s[j])/dt0*k:v);}
-  const f=(t-A.t)/Math.max(1,B.t-A.t);return B.s.map((v,j)=>j===3?A.s[3]+wrapA(v-A.s[3])*f:A.s[j]+(v-A.s[j])*f);}
+/* ---- smooth movement: each sender's own clock (so uneven arrival doesn't make things speed up and slow down), a short
+   delay so there are always two snapshots either side, and a curve through them that follows each one's speed and heading ---- */
+function nwClk(from,t){const now=Date.now();if(!(t>0))return now;const d=now-t;let o=NW.off[from];if(o==null||d<o)o=d;else o+=(d-o)*0.01;NW.off[from]=o;return t+o;}
+function nwPush(buf,t,s){const L=buf[buf.length-1];if(L&&t<=L.t){if(t===L.t)L.s=s;return;}buf.push({t,s});if(buf.length>16)buf.shift();}
+// s: [x,y,z,heading,...]; vel(s) -> [vx,vz] (metres a second)
+function nwInterp(buf,rt,vel){const n=buf.length;if(!n)return null;if(rt<=buf[0].t)return buf[0].s;
+  let i=n-1;while(i>0&&buf[i].t>rt)i--;const A=buf[i];
+  if(i===n-1){const k=Math.min(0.35,(rt-A.t)/1000),v=vel(A.s),o=A.s.slice();o[0]+=v[0]*k;o[2]+=v[1]*k;return o;}
+  const B=buf[i+1],T=(B.t-A.t)/1000,f=(rt-A.t)/Math.max(1,B.t-A.t);
+  if(Math.hypot(B.s[0]-A.s[0],B.s[2]-A.s[2])>45)return f<0.5?A.s:B.s;
+  const va=vel(A.s),vb=vel(B.s),f2=f*f,f3=f2*f,h00=2*f3-3*f2+1,h10=f3-2*f2+f,h01=-2*f3+3*f2,h11=f3-f2;
+  return B.s.map((v,j)=>{const a=A.s[j];if(typeof v!=='number'||typeof a!=='number')return v;
+    if(j===0)return h00*a+h10*T*va[0]+h01*v+h11*T*vb[0];if(j===2)return h00*a+h10*T*va[1]+h01*v+h11*T*vb[1];
+    if(j===3)return a+wrapA(v-a)*f;return a+(v-a)*f;});}
+const nwVelCar=s=>[s[4]*Math.cos(s[3]),-s[4]*Math.sin(s[3])];
+const nwVelPed=s=>{const g=s[4]||0,v=g<=1?g*1.4:1.4+(g-1)*3.25;return [v*Math.cos(s[3]),-v*Math.sin(s[3])];};
+const NW_DELAY=300;
+// what's drawn follows that curve, but a jump in it (a late packet, a hitch) is eased out over a moment instead of a snap
+function nwSmooth(R,s,dt){if(!s)return s;const V=R.vs;if(!V||!(dt>0)){R.vs=s.slice();return s;}const k=Math.exp(-dt*7),o=s.slice();
+  for(const j of [0,1,2]){let e=V[j]-s[j];if(Math.abs(e)>14)e=0;o[j]=s[j]+e*k;}o[3]=s[3]+wrapA(V[3]-s[3])*k;R.vs=o;return o;}
 
 /* ---- every frame: the puppets ---- */
 function nwFrame(dt){const now=performance.now();
@@ -18498,8 +18520,10 @@ function nwFrame(dt){const now=performance.now();
   NW.pkOther.clear();for(const p of NET.peers){const L=p.pr&&p.pr.pk;if(Array.isArray(L))L.forEach(i=>NW.pkOther.add(i|0));}
   // the cars: traffic and police
   const cops=[];
-  for(const [key,R] of NW.rtr){if(now-R.seen>1500){if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.delete(key);continue;}
-    const e=R.e,s=nwSample(R.buf,now);if(!s)continue;
+  const wall=Date.now(),rt=wall-NW_DELAY;NW.frameT=wall;
+  const stale=R=>(NW.lastFrom[R.from]||0)-R.seen>700||wall-R.seen>4000;   // left their list, or nothing from them for a while
+  for(const [key,R] of NW.rtr){if(stale(R)){if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.delete(key);continue;}
+    const e=R.e,s=nwSmooth(R,nwInterp(R.buf,rt,nwVelCar),dt);if(!s)continue;
     if(R.gone)continue;
     if(!R.a||!R.a.alive){if(R.bad)continue;R.a=TR.remoteCar.make(e[1],R.cop?null:e[2],s[0],s[1],s[2],s[3],R.cop?e[2]:null,R.cop?null:e[10]);if(!R.a){R.bad=true;continue;}R.a.nwR=R;R.last=null;}
     const a=R.a,fl=e[8]|0;try{nwPuppetPush(R,a);}catch(x){}a.x=s[0];a.y=s[1];a.z=s[2];a.psi=s[3];a.u=s[4];a.vk=Math.abs(s[4]);a.v=0;a.yr=0;a.gy=s[5]||0;a.omega=a.u/(a.r||0.33);a.omegaF=a.omega;a.alpha=1;a.fade=1;
@@ -18515,10 +18539,11 @@ function nwFrame(dt){const now=performance.now();
   for(const u of TR.pd.units()){if(!u.adopted||u.a.pd||!u.a.alive){if(u.adopted)u.relT=0;continue;}u.relT=(u.relT||0)+dt;if(u.relT>8&&!TR.seen(u.a.x,u.a.z,3))TR.pd.replace(u);}
   // the people
   const cp=camera.position;
-  for(const [key,R] of NW.rped){if(now-R.seen>1500){nwPedDrop(R);NW.rped.delete(key);continue;}
-    const e=R.e,s=nwSample(R.buf,now);if(!s)continue;const cop=!!(e[7]&4),ri=e[1]|0;
-    if(!R.node||R.ri!==ri||R.cop!==cop){nwPedDrop(R);try{const b=cop?copBuild(ri,true):(()=>{const g=buildNPC(NPCS[ri%NPCS.length]||NPCS[0]);mergeRig(g);const node=new THREE.Group();node.add(g);return {g,node};})();
-        R.g=b.g;R.node=b.node;R.ri=ri;R.cop=cop;R.g.traverse(o=>{if(o.isMesh)o.castShadow=true;});scene.add(R.node);}catch(x){R.node=null;continue;}}
+  for(const [key,R] of NW.rped){if(stale(R)){nwPedDrop(R);NW.rped.delete(key);continue;}
+    const e=R.e,s=nwSmooth(R,nwInterp(R.buf,rt,nwVelPed),dt);if(!s)continue;const cop=!!(e[7]&4),ri=e[1]|0;
+    if(!R.node||R.ri!==ri||R.cop!==cop){nwPedDrop(R);try{const pk=(cop?'c':'p')+ri,pool=NW.pedPool.get(pk);let b=pool&&pool.pop();
+        if(!b){b=cop?copBuild(ri,true):(()=>{const g=buildNPC(NPCS[ri%NPCS.length]||NPCS[0]);mergeRig(g);const node=new THREE.Group();node.add(g);return {g,node};})();b.g.traverse(o=>{if(o.isMesh)o.castShadow=true;});}
+        R.g=b.g;R.node=b.node;R.ri=ri;R.cop=cop;R.pk=pk;scene.add(R.node);}catch(x){R.node=null;continue;}}
     R.x=s[0];R.z=s[2];R.node.position.set(s[0],s[1],s[2]);R.node.rotation.set(0,s[3],0);const g=R.g,down=e[7]&3;
     if(down){if(!R.down){R.down=true;g.position.set(0,0.12,0);g.rotation.set(0,0,Math.PI/2);try{apply(g.userData.npc,PZ());}catch(x){}}continue;}
     if(R.down){R.down=false;g.position.set(0,0,0);g.rotation.set(0,0,0);}
@@ -18536,7 +18561,7 @@ function nwFrame(dt){const now=performance.now();
   NW.xT-=dt;if(NW.xT<=0){NW.xT=0.5;try{refreshExtra();}catch(x){}}
   // and mine, to them
   NW.sendT-=dt;if(NW.sendT<=0){NW.sendT=0.2;const o=nwPack();NW.packN=(NW.packN||0)+1;if(o&&NET.room&&NET.room.world){NW.tx=(NW.tx||0)+1;NW.txTr=o.tr.length;NET.room.world(o);}}}
-function nwPedDrop(R){if(R.node)scene.remove(R.node);if(R.g){R.g.position.set(0,0,0);R.g.rotation.set(0,0,0);}R.node=null;R.g=null;R.down=false;}
+function nwPedDrop(R){if(R.node){scene.remove(R.node);if(R.g&&R.pk){R.g.position.set(0,0,0);R.g.rotation.set(0,0,0);let L=NW.pedPool.get(R.pk);if(!L)NW.pedPool.set(R.pk,L=[]);if(L.length<6)L.push({g:R.g,node:R.node});}}R.node=null;R.g=null;R.down=false;}
 function nwClear(){for(const R of NW.rtr.values())if(R.a&&R.a.alive)TR.remove(R.a);NW.rtr.clear();for(const R of NW.rped.values())nwPedDrop(R);NW.rped.clear();
   for(const R of NW.rpc.values())scene.remove(R.v.node);NW.rpc.clear();NW.cops=[];window.BAY_NETCOPS=[];window.BAY_NETP=null;window.BAY_NETN=0;window.BAY_NETPATROL=undefined;NW.eb=null;NW.known=null;NW.pkOther.clear();
   try{for(const u of TR.pd.units())u.a.netHide=false;}catch(e){}try{refreshExtra();}catch(e){}}
@@ -18608,15 +18633,14 @@ function nwBumpIn(from,e){const dv=nwL2(0,0,0);
 // each frame: did my driving push one of their cars (or a copy of their traffic)? the push goes to them
 function nwBumps(){if(!DRIVE)return;const me=DRIVE.ph;
   // the other players' cars: they and I collide
-  for(const R of NET.rem.values()){const v=R.car;if(!v||!v.ph||!R.pr||!R.pr.c)continue;const o=v.ph;if(Math.abs(o.x-me.x)>9||Math.abs(o.z-me.z)>9)continue;
-    const c0=Math.cos(o.psi),s0=Math.sin(o.psi),ox=o.u*c0-(o.v||0)*s0,oz=-o.u*s0-(o.v||0)*c0;
-    const mc=Math.cos(me.psi),ms=Math.sin(me.psi),mx=me.u*mc-me.v*ms,mz=-me.u*ms-me.v*mc;let imp=0;try{imp=TR.pair(me,o);}catch(x){}if(!(imp>0))continue;
-    const c1=Math.cos(o.psi),s1=Math.sin(o.psi),dx=(o.u*c1-(o.v||0)*s1)-ox,dz=(-o.u*s1-(o.v||0)*c1)-oz,m=Math.hypot(dx,dz);
+  for(const R of NET.rem.values()){const v=R.car;if(!v||!v.ph||!R.pr||!R.pr.c)continue;const o=v.ph;if(Math.abs(o.x-me.x)>9||Math.abs(o.z-me.z)>9)continue;o.remote=true;
+    const mc=Math.cos(me.psi),ms=Math.sin(me.psi),mx=me.u*mc-me.v*ms,mz=-me.u*ms-me.v*mc;let imp=0;o.nwDx=o.nwDz=0;try{imp=TR.pair(me,o);}catch(x){}if(!(imp>0))continue;
+    const dx=o.nwDx||0,dz=o.nwDz||0,m=Math.hypot(dx,dz);o.nwDx=o.nwDz=0;
     const mx2=me.u*mc-me.v*ms,mz2=-me.u*ms-me.v*mc,dmx=mx2-mx,dmz=mz2-mz,mm=Math.hypot(dmx,dmz);
     if(mm>0.8)try{hitVehicle(DRIVE,dmx,dmz,mm);nwVehDentOut(DRIVE,dmx,dmz,mm);if(mm>2.5){me.crash=Math.max(me.crash||0,Math.min(1,mm/14));sndCrunch(mm);}}catch(x){}
     if(m>0.3&&(!R.bumpT||performance.now()-R.bumpT>150)){R.bumpT=performance.now();nwEvent({k:'b',t:'v',o:R.id,x:_r3(dx),z:_r3(dz)});}}}
 // the copies of their traffic: a push my game gave one (it isn't where their game put it any more) goes to them
-function nwPuppetPush(R,a){const L=R.last;if(!L)return;const c=Math.cos(L.psi),s=Math.sin(L.psi),vx0=L.u*c,vz0=-L.u*s,c1=Math.cos(a.psi),s1=Math.sin(a.psi),vx=a.u*c1-(a.v||0)*s1,vz=-a.u*s1-(a.v||0)*c1,dx=vx-vx0,dz=vz-vz0,m=Math.hypot(dx,dz);
+function nwPuppetPush(R,a){const dx=a.nwDx||0,dz=a.nwDz||0;a.nwDx=a.nwDz=0;const m=Math.hypot(dx,dz);
   if(m>1.0&&(!R.bumpT||performance.now()-R.bumpT>200)){R.bumpT=performance.now();nwEvent({k:'b',t:'a',o:R.from,id:R.e[0],x:_r3(dx),z:_r3(dz)});}}
 
 /* ---- a car of theirs I took: their game lets it go (it's mine now, and the people I pulled out are mine) ---- */
