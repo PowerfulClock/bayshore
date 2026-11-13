@@ -1,7 +1,7 @@
 {
- "version": "2026.11.12.0449",
+ "version": "2026.11.13.2102",
  "file": "bayshore-game.html",
- "sha256": "0f2d4eff2baef0155940fabe6a84ab3769722f47a3f8c20ba923c47ed207f02c",
+ "sha256": "6c365d0ab51102c69de9fe19e7122344fe9804bb0a128e285abe126ed6a9281b",
  "assets": [
   {
    "path": "sounds/crownvic.wav",

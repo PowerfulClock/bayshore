@@ -14167,6 +14167,63 @@ const CFG={kb:Object.assign({},KB_DEFAULT),pad:Object.assign({},PAD_DEFAULT),gfx
 try{const s=JSON.parse(localStorage.getItem('bayshore.settings')||'null');if(s){Object.assign(CFG.kb,s.kb||{});Object.assign(CFG.pad,s.pad||{});Object.assign(CFG.gfx,s.gfx||{});Object.assign(CFG.play,s.play||{});}}catch(e){}
 CFG.gfx.refl=false;   // (Back Roads' own reflections stay off; the game's are CFG.gfx.carRefl)
 function saveCfg(){try{localStorage.setItem('bayshore.settings',JSON.stringify(CFG));}catch(e){}}
+
+/* ---------------------------------------------------------------------------
+   Graphics set for this computer: the first time the game is played, a starting level from what the computer is (its
+   graphics chip, cores, memory, screen), then the game watches how smoothly it really runs over the first minute of
+   play and steps the level down (or once up) until it holds a steady frame rate. That's saved. Once the player changes
+   any graphics setting themselves, theirs are kept and the game never changes them again (Settings has a button to
+   run the check again).
+--------------------------------------------------------------------------- */
+const GAUTO_TIERS=[
+  {name:'Very low',p:'low',x:{scale:'low',distance:'short',trDetail:45,trDraw:300,winLights:0.6}},
+  {name:'Low',p:'low',x:{scale:'medium',distance:'normal',trDetail:85,trDraw:500}},
+  {name:'Medium',p:'medium',x:{scale:'high',distance:'normal',trDetail:85,trDraw:500}},
+  {name:'High',p:'high',x:{scale:'high',distance:'normal',trDetail:85,trDraw:700}},
+  {name:'Ultra',p:'ultra',x:{scale:'max',distance:'far',trDetail:140,trDraw:1000}}];
+const GAUTO=(()=>{let st=null;try{st=JSON.parse(localStorage.getItem('bayshore.gfxAuto')||'null');}catch(e){}
+  if(!st){// played before this existed: graphics they've changed themselves are theirs
+    let had=null;try{had=JSON.parse(localStorage.getItem('bayshore.settings')||'null');}catch(e){}
+    const g=had&&had.gfx,own=g&&Object.keys(g).some(k=>!(k in GFX_DEFAULT)||String(g[k])!==String(GFX_DEFAULT[k])&&k!=='refl');
+    st=own?{state:'user'}:{state:'new'};}
+  return st;})();
+function gautoSave(){try{localStorage.setItem('bayshore.gfxAuto',JSON.stringify({state:GAUTO.state,tier:GAUTO.tier,spec:GAUTO.spec,gpu:GAUTO.gpu,fps:GAUTO.fps}));}catch(e){}}
+// what the computer is
+function gautoSpec(){let gpu='',max=0,soft=false;
+  try{const c=document.createElement('canvas'),gl=c.getContext('webgl2')||c.getContext('webgl');if(gl){const d=gl.getExtension('WEBGL_debug_renderer_info');
+      gpu=String((d&&gl.getParameter(d.UNMASKED_RENDERER_WEBGL))||gl.getParameter(gl.RENDERER)||'');max=gl.getParameter(gl.MAX_TEXTURE_SIZE)||0;const lc=gl.getExtension('WEBGL_lose_context');if(lc)lc.loseContext();}}catch(e){}
+  const G=gpu.toLowerCase();let t;
+  if(/swiftshader|llvmpipe|software|microsoft basic|softpipe/.test(G)){t=0;soft=true;}
+  else if(/rtx\s*[2-9]0[6-9]0|rtx\s*[2-9]0[6-9]0\s*ti|rx\s*(6[7-9]|7[7-9])\d\d|rtx\s*a[4-6]000|apple m[1-4]\s*(pro|max|ultra)/.test(G))t=4;
+  else if(/rtx|rx\s*[5-7]\d\d\d|gtx\s*(10[6-8]|16[5-6]|9[7-8])|arc\s*a[57]|radeon\s*pro|apple m[1-4]/.test(G))t=3;
+  else if(/gtx|rx\s*\d|radeon\s*(r9|rx)|quadro|geforce|arc|iris(\(r\))?\s*xe|radeon(\(tm\))?\s*graphics|780m|680m|apple/.test(G))t=2;
+  else if(/intel|uhd|hd graphics|iris|vega\s*\d|radeon/.test(G))t=1;
+  else if(/mali|adreno|powervr|apple gpu|videocore/.test(G))t=1;
+  else t=2;
+  const cores=navigator.hardwareConcurrency||4,mem=navigator.deviceMemory||8,px=screen.width*screen.height*Math.pow(devicePixelRatio||1,2);
+  if(cores<=2||mem<=2)t=Math.min(t,1);else if(cores<=4||mem<=4)t=Math.min(t,2);
+  if(px>5e6&&t>=3)t--;   // a 4K-sized screen is a lot more to draw
+  if(max&&max<8192)t=Math.min(t,1);
+  return {tier:t,gpu,cores,mem,px:Math.round(px),soft};}
+function gautoApply(t){const T=GAUTO_TIERS[t];Object.assign(CFG.gfx,GPRESET[T.p],T.x);GAUTO.tier=t;saveCfg();try{applyGfx();}catch(e){}}
+// first play: a starting level from the computer
+function gautoInit(){if(GAUTO.state!=='new'||/[?&]test/.test(location.search))return;try{const S=gautoSpec();GAUTO.spec=S.tier;GAUTO.gpu=S.gpu;const T=GAUTO_TIERS[S.tier];Object.assign(CFG.gfx,GPRESET[T.p],T.x);GAUTO.tier=S.tier;GAUTO.state='tuning';GAUTO.ups=0;GAUTO.downs=0;saveCfg();gautoSave();}catch(e){console.warn('gfx auto',e);}}
+// then how it really runs: every frame of play is looked at
+const GAM={t:0,warm:5,gaps:[],cpu:[]};
+function gautoFrame(gap,cpu){if(GAUTO.state!=='tuning'||MODE!=='play'||document.hidden||!ME.it||(typeof NET!=='undefined'&&NET.ride&&NET.ride.seq))return;
+  if(gap>250){GAM.gaps.length=0;GAM.cpu.length=0;GAM.warm=Math.max(GAM.warm,1.5);return;}   // a load, a tab switch: not the steady frame rate
+  if(GAM.warm>0){GAM.warm-=gap/1000;return;}GAM.gaps.push(gap);GAM.cpu.push(cpu||0);if(GAM.gaps.length<480)return;   // ~8 s of play
+  const g=GAM.gaps.slice().sort((a,b)=>a-b),q=f=>g[Math.min(g.length-1,(g.length*f)|0)],p50=q(0.5),p90=q(0.9),fps=Math.round(1000/p50);GAM.gaps.length=0;GAM.cpu.length=0;GAM.warm=4;
+  GAUTO.fps=fps;const t=GAUTO.tier;
+  // not smooth: a level down
+  if((p50>21||p90>31)&&t>0){GAUTO.downs++;gautoApply(t-1);gautoSave();if(GAUTO.ups>0||GAUTO.downs>=4)gautoDone();return;}
+  // comfortably smooth, and the computer looks able for more: one level up to try it (only once; it comes back down if it can't hold it)
+  if(p50<15&&p90<19&&t<4&&t<GAUTO.spec+1&&!GAUTO.ups&&!GAUTO.downs){GAUTO.ups++;gautoApply(t+1);gautoSave();return;}
+  gautoDone();}
+function gautoDone(){GAUTO.state='done';gautoSave();toast('Graphics set to '+GAUTO_TIERS[GAUTO.tier].name+' for this computer'+(GAUTO.fps?' ('+GAUTO.fps+' fps)':'')+' · change them any time in Settings');}
+// the player's own choice from here on
+function gautoUser(){if(GAUTO.state!=='user'){GAUTO.state='user';gautoSave();}}
+function gautoRerun(){const S=gautoSpec();GAUTO.spec=S.tier;GAUTO.gpu=S.gpu;GAUTO.state='tuning';GAUTO.ups=0;GAUTO.downs=0;GAM.gaps.length=0;GAM.warm=5;gautoApply(S.tier);gautoSave();}
 function keyName(code){if(!code)return '—';return code.replace(/^Key/,'').replace(/^Digit/,'').replace('Arrow','Arrow ').replace('Escape','Esc').replace('ShiftLeft','Left Shift').replace('ShiftRight','Right Shift').replace('ControlLeft','Left Ctrl');}
 function padName(i){return i<0||i==null?'—':(PAD_NAMES[i]||('Button '+i));}
 // the car library and the traffic read the same settings
@@ -14176,7 +14233,7 @@ Object.assign(TR.cfg.gfx,CFG.gfx);TR.cfg.play=CFG.play;
    Graphics settings applied to the world renderer
 --------------------------------------------------------------------------- */
 const AUTO={on:true};
-function applyGfx(){const g=CFG.gfx;Object.assign(TR.cfg.gfx,g);
+function applyGfx(){gautoInit();const g=CFG.gfx;Object.assign(TR.cfg.gfx,g);
   if(!renderer)return;
   // shadows
   // resolution (auto keeps the renderer's own frame-time scaling)
@@ -14208,6 +14265,8 @@ function renderSettings(){
   if(settingsTab==='graphics'){const P=gfxPresetNow();
     h+='<div class="srow"><span class="slab">Preset</span><div class="segs" role="group" aria-label="Preset">'+[['low','Low'],['medium','Medium'],['high','High'],['ultra','Ultra']].map(([v,t])=>'<button type="button" class="seg'+(P===v?' on':'')+'" data-preset="'+v+'">'+t+'</button>').join('')+(P==='custom'?'<button type="button" class="seg on" disabled>Custom</button>':'')+'</div></div>';
     h+='<p class="snote">A preset sets everything below at once; change any one and it becomes Custom.</p>';
+    h+='<div class="srow"><span class="slab">Optimise for this computer</span><div class="segs"><button type="button" class="seg" id="gAuto">'+(GAUTO.state==='tuning'?'Checking…':'Run again')+'</button></div></div>';
+    h+='<p class="snote">'+(GAUTO.state==='tuning'?'Measuring how smoothly it runs as you play; the graphics will settle in about a minute.':GAUTO.state==='user'?'Using the settings you chose.':'Set for this computer'+(GAUTO.tier!=null?' ('+GAUTO_TIERS[GAUTO.tier].name+(GAUTO.fps?', '+GAUTO.fps+' fps':'')+')':'')+'. Change anything and your choice is kept.')+'</p>';
     h+='<h4 class="gsh">Display</h4>';
     h+=seg('scale','Resolution',[['auto','Auto'],['low','Low'],['medium','Medium'],['high','High'],['max','Max']],g.scale);
     h+=seg('distance','View distance',[['short','Short'],['normal','Normal'],['far','Far']],g.distance);
@@ -14277,11 +14336,12 @@ function bindSettings(){
   g$('settings').addEventListener('input',e=>{if(e.target.id==='densR')setDensity(+e.target.value);});
   g$('settings').addEventListener('click',e=>{const t=e.target.closest('button');if(!t)return;
     if(t.dataset.tab){if(t.disabled)return;settingsTab=t.dataset.tab;capture=null;renderSettings();return;}
-    if(t.dataset.preset){Object.assign(CFG.gfx,GPRESET[t.dataset.preset]);saveCfg();applyGfx();renderSettings();return;}
+    if(t.dataset.preset){Object.assign(CFG.gfx,GPRESET[t.dataset.preset]);gautoUser();saveCfg();applyGfx();renderSettings();return;}
+    if(t.id==='gAuto'){gautoRerun();renderSettings();toast('Checking how your computer runs the game: play for a minute');return;}
     if(t.dataset.set){let v=t.dataset.val;if(v==='true')v=true;else if(v==='false')v=false;else if(!isNaN(+v)&&v!=='')v=+v;
       if(t.dataset.set==='tod'){CFG.play.tod=v;saveCfg();applyPlay();renderSettings();}
       else if(t.dataset.set==='radio'){CFG.play.radio=v;saveCfg();if(!v)radioStop();renderSettings();}
-      else{CFG.gfx[t.dataset.set]=v;saveCfg();applyGfx();renderSettings();}
+      else{CFG.gfx[t.dataset.set]=v;gautoUser();saveCfg();applyGfx();renderSettings();}
       const nb=document.querySelector('#settings [data-set="'+t.dataset.set+'"][data-val="'+t.dataset.val+'"]');if(nb)nb.focus();return;}
     if(t.dataset.cops){CFG.play.police=clamp((CFG.play.police==null?6:CFG.play.police)+(+t.dataset.cops),0,10);saveCfg();const v=g$('copsV');if(v)v.textContent=CFG.play.police;if(MODE!=='menu')TR.police.want(CFG.play.police);return;}
     if(t.dataset.dens){setDensity((CFG.play.density==null?50:CFG.play.density)+(+t.dataset.dens));return;}
@@ -19961,6 +20021,7 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Graphics are set for your computer the first time you play: a starting level from your graphics card, then the game watches how smoothly it runs for the first minute and adjusts. Change any setting yourself and yours are kept (Settings → Graphics → Optimise for this computer runs it again)',
     'Police driving rebuilt: they look a few seconds ahead at where every car will be and take the gap, instead of dodging the nearest car at the last moment',
     'Police stay with you: they close right up on open roads (they used to hang back about 80 m), launch harder, and spin round with a handbrake turn when you pass them head-on',
     'Police crash less: they slow properly for bends when catching up, keep clear of buildings, posts and railings, back out when boxed in, and no longer queue behind a stuck unit',
@@ -20655,7 +20716,7 @@ const PF={t:{},hit:null,ev:null};
 const pfT=(k,t0)=>{const n=performance.now();PF.t[k]=(PF.t[k]||0)+n-t0;return n;};
 function pfEvent(name){PF.ev={name,t:performance.now()};}
 function tick(){requestAnimationFrame(tick);if(TESTMODE)return;const now=performance.now(),gap=now-last,dt=Math.min(0.05,gap/1000);last=now;clockT+=dt;
-  const prev=PF.t;PF.t={};step(dt);PF.t.total=performance.now()-now;
+  const prev=PF.t;PF.t={};step(dt);PF.t.total=performance.now()-now;try{gautoFrame(gap,PF.t.total);}catch(e){}
   if(gap>70&&MODE==='play'){let top='waiting on the graphics card',tv=0;for(const k in prev)if(k!=='total'&&prev[k]>tv){tv=prev[k];top=k;}
     if(tv<gap*0.4)top='graphics card / browser';
     const ev=PF.ev&&now-PF.ev.t<3000?' · '+((now-PF.ev.t)/1000).toFixed(1)+' s after '+PF.ev.name:'';
@@ -20692,7 +20753,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={scene:()=>scene,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
