@@ -12669,6 +12669,158 @@ function npcDriveStep(root,wheel,r,t,steer){const N=root.userData.npc;if(!N||!wh
 
 /* ---------- Model Workshop viewer ---------- */
 
+/* =====================================================================
+   Animation: everyone's body (the player, people in the street, police) goes through here.
+
+   1. Walking and running are built from where the feet go (a foot is planted, rolls from heel to toe, lifts, swings
+      through and comes down again) and the legs are solved to put them there, so feet stay on the ground instead of
+      swinging like pendulums. The hips ride at the height the standing leg allows. It can go forwards, backwards and
+      sideways (aiming a gun while moving).
+   2. The body leans into turns and into speeding up and slowing down, breathes, and looks where it's told to look.
+   3. Layers on top of any pose: a shooting stance, recoil through the shoulders and back, flinching from a hit.
+   4. Every change of pose is blended: when what a body is told to do jumps (stand > aim, walk > crouch, seat > feet)
+      the jump is taken up and eased out over a fraction of a second, without slowing down ordinary movement.
+   ===================================================================== */
+window.ANIM_T=window.ANIM_T||0;
+const GA={L1:0.42,L2:0.415,F:0.115,ok:false};
+const _c01=x=>x<0?0:x>1?1:x,_cl=(x,a,b)=>x<a?a:x>b?b:x,_wr=a=>{a=(a+Math.PI)%(Math.PI*2);if(a<0)a+=Math.PI*2;return a-Math.PI;};
+function gaDims(N){if(GA.ok||!N)return;try{const L=N.legs.L;GA.L1=L.kn.position.length();GA.L2=L.an.position.length();GA.F=Math.max(0.03,0.95-GA.L1-GA.L2);GA.ok=true;}catch(e){}}
+// a leg, from where its ankle is (x ahead of the hip, y below it): the hip and knee angles
+function gLeg(x,y){const L1=GA.L1,L2=GA.L2,d=Math.max(0.08,Math.min(Math.hypot(x,y),L1+L2-0.003)),al=Math.atan2(x,y),
+  be=Math.acos(_cl((L1*L1+d*d-L2*L2)/(2*L1*d),-1,1)),ga=Math.acos(_cl((L1*L1+L2*L2-d*d)/(2*L1*L2),-1,1));return [al+be,-(Math.PI-ga)];}
+
+/* ---------------- walk and run ---------------- */
+// mv: {f: share of the movement that is forwards (-1 backwards), s: share sideways (+ toward the body's +z), c: 0..1 a
+// careful, knees-bent walk (gun up), sp: 0..1 sprinting}
+function gaitPose(ph,run,style,mv){const p=PZ(),fem=style==='fem',f=mv?mv.f:1,sd=mv?mv.s:0,cb=(mv&&mv.c)||0,sp=(mv&&mv.sp)||0;
+  const TAU=Math.PI*2,sw=Math.sin(ph),sh=1-cb*0.38;
+  const beta=run?0.30:0.62,xf=(run?0.30:0.30)*sh,xb=(run?0.52+sp*0.03:0.36)*sh,lift=run?0.26+sp*0.08:0.075,hr=run?0.15:0.085,tu=run?0.10:0.22,td=run?0.6:0.5;
+  const F=[],Lm=GA.L1+GA.L2-0.006;
+  for(let i=0;i<2;i++){let q=(ph-Math.PI/2)/TAU+i*0.5;q-=Math.floor(q);let x,l,pt;
+    if(q<beta){const u=q/beta,e=sm(_c01((u-0.7)/0.3));x=xf-(xf+xb)*u;l=hr*e;pt=tu*(1-sm(_c01(u/0.2)))-td*e;}
+    else{const u=(q-beta)/(1-beta),e=u-Math.sin(TAU*u)/TAU;x=-xb+(xf+xb)*e;
+      l=hr*(1-sm(_c01(u/0.4)))+lift*Math.pow(Math.sin(Math.PI*Math.pow(u,run?0.7:0.85)),1.25);pt=-td*(1-sm(_c01(u/0.55)))+tu*sm(_c01((u-0.5)/0.5));}
+    F.push([x,l,pt]);}
+  // hip height: what the legs can reach (a lifted foot doesn't hold the hips down), eased where the weight changes feet
+  let hy;{const h=F.map(([x,l])=>Math.sqrt(Math.max(0.04,Lm*Lm-x*x*(f*f+sd*sd*0.6)))+l*3.2),k=38;hy=-Math.log(Math.exp(-k*h[0])+Math.exp(-k*h[1]))/k+GA.F-0.012;}
+  if(run)hy=Math.min(hy,0.905-0.03*Math.cos(2*(ph-Math.PI/2-beta*Math.PI)));
+  hy-=cb*0.03;p.hy=hy;
+  const base=fem?0.05:0;
+  for(let i=0;i<2;i++){const [x,l,pt]=F[i],a=gLeg(x*f,hy-GA.F-l);p.hp[i]=a[0];p.kn[i]=a[1];p.an[i]=-(a[0]+a[1])+pt;
+    p.hpx[i]=base-cb*0.05+(i===0?-1:1)*(x*sd)/0.8;}
+  // pelvis: turns with the leading leg, dips on the side that's swinging, shifts over the standing foot
+  p.hry=sw*(run?0.11:0.085)*f;p.hrx=Math.sin(ph-0.9)*(fem?(run?0.045:0.075):0.03);p.hz=0.016*Math.cos(ph-(Math.PI/2+beta*Math.PI))*(run?0.6:1);
+  // chest turns the other way, the head stays on the road
+  p.cry=-sw*(run?0.2:0.14)*f;p.spz=run?-0.16-sp*0.07:-0.035-cb*0.06;p.hdz=run?0.12+sp*0.04:0.03;p.hdy=-(p.hry+p.cry)*0.75;
+  // arms: opposite the legs, a touch late, bending as they come forward
+  const AS=(run?0.62+sp*0.12:(fem?0.3:0.4))*Math.abs(f),bias=run?0.14:0.04,a0=-Math.sin(ph-0.22),eb=run?1.5:0.22,out=fem?0.0:0.07;
+  p.sh=[[bias+a0*AS,out,0],[bias-a0*AS,out,0]];
+  p.el=[[eb+Math.max(0,a0)*(run?0.28:0.34)-Math.max(0,-a0)*(run?0.18:0.06),run?0.3:0.08],[eb+Math.max(0,-a0)*(run?0.28:0.34)-Math.max(0,a0)*(run?0.18:0.06),run?0.3:0.08]];
+  if(fem&&!run)p.el=[[0.34+Math.max(0,a0)*0.3,0.25],[0.34+Math.max(0,-a0)*0.3,0.25]];
+  if(style==='patrol'||style==='swagger'||style==='heavy'||style==='march'){
+    p.hpx[0]-=0.06;p.hpx[1]-=0.06;p.sh[0][1]=0.24;p.sh[1][1]=0.24;}                                   // a wider stance, arms clear of the duty belt
+  if(!run){
+    if(style==='patrol'){p.sh[0]=[-0.05,0.36,0];p.el[0]=[1.2,1.35];p.sh[1][0]*=0.8;p.cry*=0.6;}          // gun hand stays on the belt
+    if(style==='swagger'){p.cry=-sw*0.28;p.hry=sw*0.06;p.sh[0][0]*=1.15;p.sh[1][0]*=1.15;p.hdy=-sw*0.08;p.hrx=sw*0.03;}
+    if(style==='march'){p.cry=0;p.hry=sw*0.03;p.spz=0.02;p.hdz=0.06;p.sh[0][0]*=0.7;p.sh[1][0]*=0.7;p.el=[[0.18,0],[0.18,0]];}
+    if(style==='heavy'){p.hrx=sw*0.06;p.hy-=0.008;p.cry=-sw*0.08;p.hpx[0]-=0.04;p.hpx[1]-=0.04;}
+  }
+  return p;}
+
+/* ---------------- what's laid over a pose ---------------- */
+// fx.aim 0..1 (a gun up), fx.pitch (aiming up +, down -), fx.side (+1: gun in the +z hand), fx.look [yaw,pitch] the head
+// and shoulders turn (relative to the body), fx.breath 0..1 out of breath. animKick / animFlinch give it a knock.
+function animFx(root){const N=root.userData.npc;return N.fx||(N.fx={aim:0,aimK:0,pitch:0,side:1,look:null,lk:[0,0],k:0,kv:0,fx:0,fz:0,fvx:0,fvz:0,breath:0});}
+function animKick(root,mag){const fx=animFx(root);fx.kv+=mag*9;}
+function animFlinch(root,fwd,side){const fx=animFx(root);fx.fvx+=fwd*8;fx.fvz+=side*8;}
+function animLayers(N,p,dt,v,t){const fx=N.fx;
+  // breathing: chest and shoulders, deeper and faster out of breath
+  {const b=fx?fx.breath||0:0,w=Math.sin(t*(1.5+b*4.5)+(N.index||0))*(0.008+b*0.03)*(1-Math.min(1,v)*0.6);p.crx+=0;p.spz+=w;p.sh[0][1]+=w*0.6;p.sh[1][1]+=w*0.6;p.hdz-=w*0.5;}
+  if(!fx)return;
+  const still=1-Math.min(1,v);
+  fx.aimK+=(fx.aim-fx.aimK)*Math.min(1,dt*9);const a=fx.aimK;
+  if(a>0.01){const s=fx.side||1,i0=s>0?1:0,i1=1-i0;   // i0: the leg on the support-hand side goes forward
+    const e=sm(a),kb=e*still;
+    p.hp[i0]+=0.2*kb;p.kn[i0]-=0.34*kb;p.hp[i1]-=0.1*kb;p.kn[i1]-=0.2*kb;p.hy-=0.035*kb;
+    p.an[i0]=p.an[i0]*(1-kb)+(-(p.hp[i0]+p.kn[i0]))*kb;p.an[i1]=p.an[i1]*(1-kb)+(-(p.hp[i1]+p.kn[i1])-0.12)*kb;
+    p.hpx[0]-=0.07*e;p.hpx[1]-=0.07*e;
+    p.spz-=0.09*e-(fx.pitch||0)*0.3*e;p.hry+=s*0.22*kb;p.cry-=s*0.1*kb;p.hdz+=0.04*e;}
+  // recoil: a spring knocked back by each shot (shoulders and back take it, the head nods)
+  {const w=22,z=0.55,acc=-w*w*fx.k-2*z*w*fx.kv;fx.kv+=acc*dt;fx.k+=fx.kv*dt;fx.k=_cl(fx.k,-0.5,0.5);const k=fx.k,s=fx.side||1;
+    if(Math.abs(k)>0.0005){p.spz+=k*0.42;p.cry+=s*k*0.5;p.hdz-=k*0.3;p.hry+=s*k*0.12;}}
+  // a hit: the body gives the way it was pushed and comes back
+  {const w=13,z=0.6;let acc=-w*w*fx.fx-2*z*w*fx.fvx;fx.fvx+=acc*dt;fx.fx+=fx.fvx*dt;acc=-w*w*fx.fz-2*z*w*fx.fvz;fx.fvz+=acc*dt;fx.fz+=fx.fvz*dt;
+    fx.fx=_cl(fx.fx,-0.8,0.8);fx.fz=_cl(fx.fz,-0.8,0.8);
+    if(Math.abs(fx.fx)+Math.abs(fx.fz)>0.001){p.spz-=fx.fx*0.5;p.hdz+=fx.fx*0.3;p.crx+=fx.fz*0.45;p.hrx+=fx.fz*0.12;p.hdx-=fx.fz*0.3;p.hy-=Math.min(0.06,(Math.abs(fx.fx)+Math.abs(fx.fz))*0.07);
+      p.kn[0]-=Math.abs(fx.fx)*0.25;p.kn[1]-=Math.abs(fx.fx)*0.25;}}
+  // looking: eyes first (the head), the shoulders follow a little
+  {const L=fx.look,ty=L?_cl(L[0],-1.25,1.25):0,tp=L?_cl(L[1],-0.6,0.6):0,r=Math.min(1,dt*(L?7:4));fx.lk[0]+=(ty-fx.lk[0])*r;fx.lk[1]+=(tp-fx.lk[1])*r;
+    if(Math.abs(fx.lk[0])+Math.abs(fx.lk[1])>0.002){p.hdy+=fx.lk[0]*0.62;p.cry+=fx.lk[0]*0.2;p.hdz+=fx.lk[1]*0.6;p.spz+=fx.lk[1]*0.08;}}}
+
+/* ---------------- state and application ---------------- */
+function npcPose(root,t,gait,dt){const N=root.userData.npc;if(!N)return;const R=N.recipe,st=npcState(root);gaDims(N);
+  if(dt==null){dt=st.lastT==null?0:Math.max(0,Math.min(0.1,t-st.lastT));}st.lastT=t;
+  if(typeof gait==='string'){st.v=0;apply(N,seatPose(gait,t+(N.index||0)*1.7,R,N.seatFit));return;}
+  const target=gait===true?1:gait||0;
+  // ease the speed toward the target: under half a second from standing to walking, a little longer up to a run
+  const rate=target>st.v?(st.v<1?2.4:1.9):2.3;st.v+=Math.sign(target-st.v)*Math.min(Math.abs(target-st.v),rate*dt);
+  const v=st.v,f=0.95+Math.max(0,v-1)*0.5+Math.max(0,v-2)*0.6;st.ph+=dt*2*Math.PI*f*Math.max(0.35,Math.min(1,v*1.5));
+  // how fast it's turning and speeding up, for the lean
+  const yaw=((root.parent&&root.parent.rotation.y)||0)+root.rotation.y;
+  if(st.yaw!=null&&dt>0){st.yr=(st.yr||0)+(_cl(_wr(yaw-st.yaw)/dt,-7,7)-(st.yr||0))*Math.min(1,dt*6);st.ac=(st.ac||0)+(_cl((v-st.v0)/dt,-4,4)-(st.ac||0))*Math.min(1,dt*5);}
+  st.yaw=yaw;st.v0=v;
+  const style=R.walk||(R.sex==='f'?'fem':'normal');
+  const idleKey=R.idle||(R.police?IDLE_P:R.sex==='f'?IDLE_F:IDLE_M)[(N.index||0)%6];
+  const idle=IDLE[idleKey](PZ(),t+(N.index||0)*1.3);
+  const m0=st.mv,mv={f:m0?m0.f:1,s:m0?m0.s:0,c:m0?m0.c||0:0,sp:_c01(v-2)};
+  const walk=gaitPose(st.ph,false,style,mv),run=v>1?gaitPose(st.ph,true,style,mv):walk;
+  const p=v<=1?lerpP(idle,walk,sm(Math.min(1,v))):lerpP(walk,run,sm(Math.min(1,v-1)));
+  if(v>0.05){const k=Math.min(1,v),yr=st.yr||0,ac=st.ac||0;
+    p.hrx-=_cl(yr*0.02*Math.min(2.2,v),-0.16,0.16);p.crx-=_cl(yr*0.012*Math.min(2.2,v),-0.1,0.1);p.hdy+=_cl(yr*0.07,-0.4,0.4)*k;p.cry+=_cl(yr*0.03,-0.15,0.15)*k;
+    p.spz-=_cl(ac*0.045,-0.1,0.12);}
+  animLayers(N,p,dt,v,t);
+  apply(N,p);}
+
+/* ---------------- blending between poses ---------------- */
+// how fast each part can honestly move (per second); a bigger change than that in one frame is a cut from one pose to
+// another, and is eased out
+const AN_V=[16,16, 7,7, 36,36, 24,24, 18,18,18, 18,18,18, 22,22, 22,22, 2.6,1.6, 7,7, 9,9, 9, 11,11,11],AN_W=17;
+function anFlat(p,F){F[0]=p.hp[0];F[1]=p.hp[1];F[2]=p.hpx[0];F[3]=p.hpx[1];F[4]=p.kn[0];F[5]=p.kn[1];F[6]=p.an[0];F[7]=p.an[1];
+  F[8]=p.sh[0][0];F[9]=p.sh[0][1];F[10]=p.sh[0][2];F[11]=p.sh[1][0];F[12]=p.sh[1][1];F[13]=p.sh[1][2];F[14]=p.el[0][0];F[15]=p.el[0][1];F[16]=p.el[1][0];F[17]=p.el[1][1];
+  F[18]=p.hy;F[19]=p.hz;F[20]=p.hrx;F[21]=p.hry;F[22]=p.cry;F[23]=p.crx;F[24]=p.spz;F[25]=p.hdx;F[26]=p.hdy;F[27]=p.hdz;return F;}
+const _anF=new Float32Array(28),_anO={hp:[0,0],hpx:[0,0],kn:[0,0],an:[0,0],sh:[[0,0,0],[0,0,0]],el:[[0,0],[0,0]],hy:0,hz:0,hrx:0,hry:0,cry:0,crx:0,spz:0,hdx:0,hdy:0,hdz:0,phone:0};
+function apply(N,p){let S=N.an;const now=window.ANIM_T||0,F=anFlat(p,_anF);
+  if(!S)S=N.an={t:-1e9,dt:0,prev:new Float32Array(28),prev0:new Float32Array(28),o:new Float32Array(28),ov:new Float32Array(28),o0:new Float32Array(28),ov0:new Float32Array(28)};
+  const gap=now-S.t;
+  if(N.anSnap||gap>0.3||gap<0){N.anSnap=false;S.t=now;S.dt=0;S.prev.set(F);S.prev0.set(F);S.o.fill(0);S.ov.fill(0);S.o0.fill(0);S.ov0.fill(0);applyRaw(N,p);return;}
+  if(gap>0){S.prev0.set(S.prev);S.o0.set(S.o);S.ov0.set(S.ov);S.dt=gap;S.t=now;}   // a new frame; (a second pose in the same frame replaces the first)
+  const dt=S.dt,e=Math.exp(-AN_W*dt);let any=false;
+  for(let i=0;i<28;i++){const d=F[i]-S.prev0[i];let y=S.o0[i],vv=S.ov0[i];
+    if(Math.abs(d)>AN_V[i]*dt+0.012){y-=d;if(Math.abs(y)>3)y=0;}
+    if(y!==0||vv!==0){const j=vv+AN_W*y;const y1=(y+j*dt)*e,v1=(vv-j*AN_W*dt)*e;y=Math.abs(y1)<0.0004&&Math.abs(v1)<0.004?0:y1;vv=y===0?0:v1;any=any||y!==0;}
+    S.o[i]=y;S.ov[i]=vv;S.prev[i]=F[i];F[i]+=y;}
+  if(!any){applyRaw(N,p);return;}
+  const o=_anO;o.hp[0]=F[0];o.hp[1]=F[1];o.hpx[0]=F[2];o.hpx[1]=F[3];o.kn[0]=F[4];o.kn[1]=F[5];o.an[0]=F[6];o.an[1]=F[7];
+  o.sh[0][0]=F[8];o.sh[0][1]=F[9];o.sh[0][2]=F[10];o.sh[1][0]=F[11];o.sh[1][1]=F[12];o.sh[1][2]=F[13];o.el[0][0]=F[14];o.el[0][1]=F[15];o.el[1][0]=F[16];o.el[1][1]=F[17];
+  o.hy=F[18];o.hz=F[19];o.hrx=F[20];o.hry=F[21];o.cry=F[22];o.crx=F[23];o.spz=F[24];o.hdx=F[25];o.hdy=F[26];o.hdz=F[27];o.phone=p.phone;
+  applyRaw(N,o);}
+function applyRaw(N,p){const {joints:J,arms:A,legs:L}=N;
+  {const sk=J.hips.userData.skirt;if(sk)sk.rotation.z=Math.max(0,(p.hp[0]+p.hp[1])/2-0.35);}
+  [['L',0],['R',1]].forEach(([s,i])=>{const g=L[s];g.hp.rotation.set((s==='L'?1:-1)*p.hpx[i],0,p.hp[i]);g.kn.rotation.z=p.kn[i];g.an.rotation.z=p.an[i];
+    const a=A[s],out=p.sh[i][1];a.sh.rotation.set((s==='L'?-1:1)*out,p.sh[i][2],p.sh[i][0]);
+    a.el.rotation.set(0,(s==='L'?1:-1)*p.el[i][1],p.el[i][0]);});
+  J.hips.position.y=p.hy;J.hips.position.z=p.hz;J.hips.rotation.set(p.hrx,p.hry,0);
+  J.chest.rotation.set(p.crx,p.cry,0);J.spine.rotation.z=p.spz;J.head.rotation.set(p.hdx,p.hdy,p.hdz);
+  if(N.phone)N.phone.visible=p.phone>0.5;}
+
+/* ---------------- getting up out of a seat, and down into one ---------------- */
+// w: 0 seated (the seat pose sp) .. 1 standing. On the way: weight forward over the feet, a push up through the legs
+// (the hips come up from low), head and chest leading, arms helping
+function riseBlend(sp,w,sg){if(w<=0)return sp;const mid=PZ(),hy=0.74,a0=gLeg(0.2,hy-GA.F),a1=gLeg(-0.04,hy-GA.F+0.02);
+  mid.hy=hy;mid.hp=[a0[0],a1[0]];mid.kn=[a0[1],a1[1]];mid.an=[-(a0[0]+a0[1]),-(a1[0]+a1[1])];mid.hpx=[-0.1,-0.1];
+  mid.spz=-0.62;mid.hdz=0.36;mid.crx=(sg||0)*0.08;mid.sh=[[0.42,0.3,0],[0.28,0.25,0]];mid.el=[[0.75,0],[0.6,0]];
+  if(w<0.55)return lerpP(sp,mid,sm(w/0.55));return lerpP(mid,PZ(),sm((w-0.55)/0.45));}
+
 </script>
 <script>
 /* Bayshore: street lamps as a light term in every lit material (the 48 street lamps nearest the camera, diffuse light
@@ -14782,6 +14934,9 @@ function playStep(dt){const it=ME.it;if(!it)return;const P=it.pl,g=it.g;if(NET.r
   if(aimH){P.psi=wrapA(P.psi+clamp(wrapA(ME.yaw-P.psi),-12*dt,12*dt));}
   else if(moving){const want=ME.yaw+Math.atan2(-r,f),d=wrapA(want-P.psi);P.psi=wrapA(P.psi+clamp(d,-11*dt,11*dt));turnSlow=clamp(1-Math.abs(d)/1.9,0.2,1);}
   const air=P.vy!==0&&P.jump;
+  {const fx=animFx(g),st0=npcState(g);fx.aim=WP.eq&&!WP.seq?(WP.raise||0):0;fx.side=1;fx.pitch=WP.aimDir?Math.asin(clamp(WP.aimDir.y,-1,1)):0;fx.breath=typeof STAM!=='undefined'?clamp((1-STAM.v)*1.2+(STAM.ex?0.4:0),0,1):0;
+    // moving with the gun up: the feet go the way you're going (sideways, backwards), the body stays on the target
+    if(aimH&&moving){const d=wrapA(ME.yaw+Math.atan2(-r,f)-P.psi);st0.mv={f:Math.cos(d),s:-Math.sin(d),c:WP.raise||0};}else st0.mv={f:1,s:0,c:0};}
   if(air){apply(g.userData.npc,airPose(clamp(P.vy<0?1:0.6,0,1)));}
   else npcPose(g,ME.t,moving?(run&&!aimH?2.6:aimH?0.85:1):0,dt);
   if(COVER.k>0)coverAfterPose(dt);
@@ -15032,7 +15187,7 @@ function wheelHands(g,v,ang,w){if(w<=0.001)return;const N=g.userData.npc,wh=v.m.
     const Sh=arm.sh.getWorldPosition(V3()),W=P.clone().addScaledVector(Sh.clone().sub(P).normalize(),0.065);
     applyArm(arm,solveArm(arm,W,new THREE.Vector3(-0.3,-1,sg*0.9).applyQuaternion(qc).normalize()),null,w);});}
 function seatedPose(g,v,r,k,lean,fwd){const N=g.userData.npc,fit=r.seat.obj.userData.seatFit;
-  let p=seatPose('drive',ME.t,N.recipe,fit);if(k>0)p=lerpP(p,PZ(),ezs(k));
+  let p=seatPose('drive',ME.t,N.recipe,fit);if(k>0)p=riseBlend(p,k,r.sg);
   if(lean){const sl=r.sg<0?1:-1;p.crx-=lean*0.32*sl;p.spz-=lean*0.08;p.hdx-=lean*0.15*sl;}
   if(fwd){p.spz-=fwd*0.7;p.hdz+=fwd*0.12;}
   N.seatFit=fit;apply(N,p);}
@@ -15136,14 +15291,7 @@ function carSeqStep(dt){const S=ME.seq,it=ME.it,g=it.g,v=S.v,r=S.r,rd=S.rd||r;S.
       const f=doorFrac(r);S.w=f<0.7?1:Math.max(0,1-(f-0.7)/0.12);armTo(g,hand,hW,S.w);
       if(f>0.82||S.t>1.1)next(S.vic?'pull':'sit');return;}
     // a carjacking: both hands on them and out they come
-    if(S.ph==='pull'){const V=S.vic,u=S.t,hL=toL(v,hW);hL.y=0;
-      if(!S.pulled&&u>=0.3){S.pulled=true;V.mode='thrown';V.t=0;V.from=V.pos.clone();vicScream(V);sndGrab();}
-      const back=new THREE.Vector3(S.stand.x-0.15,0,S.stand.z+r.sg*0.45);S.pos.copy(S.from).lerp(back,ezs((u-0.35)/0.6));
-      const into=V.node.localToWorld(V.pos.clone());const tl=toL(v,into);tl.y=0;S.rot+=clamp(wrapA(faceTo(S,tl)-S.rot),-6*dt,6*dt);
-      npcPose(g,ME.t,0,dt);bodyAt(it,v,S.pos,S.rot);
-      V.g.updateMatrixWorld(true);const ch=V.g.userData.npc.joints.chest.getWorldPosition(V3()),w=u<0.3?ezs(u/0.3):1-ezs((u-0.85)/0.3);
-      armTo(g,'R',ch.clone().add(new THREE.Vector3(0,0.05,0)),w);armTo(g,'L',ch.clone().add(new THREE.Vector3(0,-0.08,0)),w);
-      if(u>=1.15){S.from=S.pos.clone();next('sit');S.from=S.pos.clone();}return;}
+    if(S.ph==='pull'){carJackPull(S,dt);if(S.t>=1.72){S.from=S.pos.clone();next('sit');S.from=S.pos.clone();}return;}
     if(S.ph==='sit'){const u=Math.min(1,S.t/0.8),sL=seatL(v,r);S.pos.copy(bez(S.from,S.door,sL,ezs(u)));
       S.pos.y=lerp(0,sL.y,ezs((u-0.35)/0.65));S.rot=S.rot0+wrapA(0-S.rot0)*ezs(u/0.7);
       seatedPose(g,v,r,1-ezs((u-0.2)/0.7));bodyAt(it,v,S.pos,S.rot);if(u>=1){S.rot=0;next(r.doorGone?(r===rd?'wheel':'climb'):'reachIn');}return;}
@@ -15199,6 +15347,54 @@ function carSeqStep(dt){const S=ME.seq,it=ME.it,g=it.g,v=S.v,r=S.r,rd=S.rd||r;S.
     if(S.ph==='shut'){const f=doorFrac(r);npcPose(g,ME.t,0,dt);bodyAt(it,v,S.pos,S.rot);
       const far=reach(g,hand,hW);S.w=Math.max(0,Math.min(S.w,1-(far-0.52)/0.12));if(S.w>0)armTo(g,hand,hW,S.w);
       if(f<=0.001)S.done=(S.done||0)+dt;if(S.done>0.1||S.t>1.8){finishOut(false);}return;}}}
+/* Pulling someone out of their seat. You step into the open door and bend in, one hand takes them behind the near shoulder
+   and the other a fistful of their front; they see you, flinch away and get their hands up; then you straighten, step back
+   and turn, and they come out with your hands (their shoulder follows the grip, their feet scrabble under them, they claw
+   at your wrist) until you let go and they go down. */
+function carJackPull(S,dt){const it=ME.it,g=it.g,v=S.v,r=S.r,V=S.vic,u=S.t,sg=r.sg,hw=v.halfWid,e=ezs,N=g.userData.npc,VN=V.g.userData.npc;
+  if(!S.jk){const sp=V.pos;S.jk={inP:new THREE.Vector3(sp.x+0.05,0,sg*(hw+0.42)),outP:new THREE.Vector3(sp.x+0.12,0,sg*(hw+0.98)),seat:sp.clone(),
+      rearK:sg<0?'L':'R',frontK:sg<0?'R':'L',nearK:V.sg>0?'L':'R',farK:V.sg>0?'R':'L'};V.mode='drag';V.t=0;V.from=V.pos.clone();}
+  const J=S.jk,lean=e(u/0.42)*(1-e((u-0.62)/0.5)),haul=e((u-0.6)/0.7),pb=haul*(1-e((u-1.32)/0.3)),held=u<1.32;
+  // you: in to the door, then back and round
+  S.pos.copy(S.from).lerp(J.inP,e(u/0.4)).lerp(J.outP,e((u-0.64)/0.7));
+  const faceIn=faceTo({pos:J.inP},new THREE.Vector3(J.seat.x-0.05,0,J.seat.z));
+  const f1=S.rot0+wrapA(faceIn-S.rot0)*e(u/0.32);S.rot=f1+wrapA(Math.PI-f1)*haul*0.85;   // turning to haul them back along the car
+  npcPose(g,ME.t,0,dt);
+  {const p=PZ();p.spz=-0.66*lean+0.12*pb;p.hdz=0.34*lean;p.hy=0.95-0.1*lean-0.05*pb;const yy=p.hy-GA.F,a0=gLeg(0.2*lean-0.14*pb,yy),a1=gLeg(-0.16*lean+0.2*pb,yy);
+    p.hp=[a0[0],a1[0]];p.kn=[a0[1],a1[1]];p.an=[-(a0[0]+a0[1]),-(a1[0]+a1[1])];p.hpx=[-0.09,-0.09];p.sh=[[0.45*lean,0.12,0],[0.45*lean,0.12,0]];p.el=[[0.5,0],[0.5,0]];
+    p.cry=-sg*0.35*pb;p.hry=-sg*0.12*pb;apply(N,p);}
+  bodyAt(it,v,S.pos,S.rot);
+  // them: startled, then hauled out
+  if(held){const fit=V.seat.obj.userData.seatFit,k1=V.dead?0:e((u-0.14)/0.3),out=e((u-0.66)/0.5);
+    let p=seatPose(V.kind==='drive'?'drive':V.kind,ME.t+(V.voice*7),VN.recipe,fit);VN.seatFit=fit;
+    if(k1>0){const up=k1*(1-out*0.5);p.sh=[[lerp(p.sh[0][0],1.35,up),lerp(p.sh[0][1],0.42,up),0],[lerp(p.sh[1][0],1.35,up),lerp(p.sh[1][1],0.42,up),0]];
+      p.el=[[lerp(p.el[0][0],1.75,up),0.2*up],[lerp(p.el[1][0],1.75,up),0.2*up]];p.hdy+=-V.sg*0.95*k1*(1-out);p.crx+=-V.sg*0.2*k1*(1-out);p.hdz+=0.12*k1;}
+    if(V.dead){p.hdz-=0.5;p.hdx+=0.3;}
+    if(out>0){const st=PZ(),sc=Math.sin(ME.t*17)*0.5;st.hy=0.8;st.spz=-0.6;st.hdz=V.dead?-0.3:0.35;const yy=st.hy-GA.F,b0=gLeg(0.24+sc*0.12,yy),b1=gLeg(-0.2-sc*0.12,yy-0.05);
+      st.hp=[b0[0],b1[0]];st.kn=[b0[1],b1[1]];st.an=[-(b0[0]+b0[1]),-(b1[0]+b1[1])-0.3];st.sh=V.dead?[[0.3,0.2,0],[0.3,0.2,0]]:[[1.0,0.55,0],[0.2,0.7,0]];st.el=V.dead?[[0.3,0],[0.3,0]]:[[1.0,0],[0.8,0]];
+      p=lerpP(p,st,out);}
+    apply(VN,p);
+    const tilt=()=>{V.g.rotateZ(-0.5*Math.sin(Math.PI*Math.min(1,haul*1.1)));V.g.rotateX(-V.sg*0.25*Math.sin(Math.PI*haul));};
+    V.rot=V.sg*(Math.PI/2)*e((u-0.6)/0.5);vicPlaceCar(V);tilt();
+    if(haul>0){V.g.updateMatrixWorld(true);const cur=toL(v,VN.arms[J.nearK].sh.getWorldPosition(V3()));
+      if(!J.g0){J.g0=cur.clone();J.g1=new THREE.Vector3(cur.x+0.04,Math.max(cur.y,1.0)+0.06,sg*(hw+0.1));J.g2=new THREE.Vector3(cur.x-0.5,1.06,sg*(hw+1.12));}
+      const G=bez(J.g0,J.g1,J.g2,haul);V.pos.x+=G.x-cur.x;V.pos.z+=G.z-cur.z;V.pos.y+=G.y-cur.y;vicPlaceCar(V);tilt();V.g.updateMatrixWorld(true);
+      // feet not through the road once they're outside
+      const low=Math.min(toL(v,VN.legs.L.an.getWorldPosition(V3())).y,toL(v,VN.legs.R.an.getWorldPosition(V3())).y),need=0.07*e((haul-0.45)/0.4)-low;
+      if(haul>0.45&&need>0){V.pos.y+=need;vicPlaceCar(V);tilt();}}
+    if(V.kind==='drive'&&v.m.wheelObj&&!V.dead&&k1<1){try{wheelHands(V.g,v,0,1-k1);}catch(x){}}}
+  // hands on them (and, alive, theirs on your wrist)
+  V.g.updateMatrixWorld(true);
+  {const shW=VN.arms[J.nearK].sh.getWorldPosition(V3()),chW=VN.joints.chest.getWorldPosition(V3()),vf=new THREE.Vector3(1,0,0).applyQuaternion(V.g.getWorldQuaternion(new THREE.Quaternion()));
+    const gA=shW.clone().add(new THREE.Vector3(0,0.06,0)).addScaledVector(vf,-0.06),gB=chW.clone().addScaledVector(vf,0.13).add(new THREE.Vector3(0,0.05,0));
+    const w=held?e((u-0.1)/0.36):1-e((u-1.32)/0.3);armTo(g,J.rearK,gA,w);armTo(g,J.frontK,gB,w);
+    if(held&&!V.dead&&u>0.5){g.updateMatrixWorld(true);const wr=N.arms[J.frontK].wr.getWorldPosition(V3());armTo(V.g,J.farK,wr,0.85*e((u-0.5)/0.25));}}
+  if(!S.grabbed&&u>=0.42){S.grabbed=true;vicScream(V);sndGrab();}
+  if(held===false&&V.mode==='drag'){// let go: down they go, away from the door and back along the car
+    const side=new THREE.Vector3(0,0,sg).applyQuaternion(v.node.quaternion),fw=new THREE.Vector3(1,0,0).applyQuaternion(v.node.quaternion);
+    const vel=side.clone().multiplyScalar(1.4+Math.random()*0.6).addScaledVector(fw,-(2.6+Math.random()*0.8)).add(new THREE.Vector3(0,0.5,0));
+    const spin=fw.clone().multiplyScalar(V.sg*(2.5+Math.random()*1.5)).add(new THREE.Vector3(0,-sg*(1.5+Math.random()),0));
+    if(V.dead){vel.multiplyScalar(0.4);spin.multiplyScalar(0.3);}vicRag(V,vel,spin);if(V.dead)V.rag.lieFor=1e9;}}
 function seatedStep(dt){const it=ME.it,v=ME.car,r=carRig(v,'L'),g=it.g,ph=v.ph;if(!r)return;
   const spd=Math.hypot(ph.u,ph.v),lock=0.58/(1+Math.pow(spd/9,1.8)),k=clamp((ph.steer||0)/lock,-1,1);
   ME.wa=(ME.wa||0)+(-k*STEER_TURN-(ME.wa||0))*Math.min(1,dt*14);
@@ -15984,11 +16180,13 @@ function victimsFor(v,occ){const out=[];
   return out;}
 const seatLocal=(v,seat)=>{const p=v.node.worldToLocal(seat.obj.getWorldPosition(V3()));p.y-=0.91;return p;};
 function vicPlaceCar(V){const v=V.v,g=V.g;V.node.position.copy(v.node.position);V.node.rotation.set(0,v.node.rotation.y,0);g.position.copy(V.pos);g.rotation.set(0,V.rot,0);}
-function vicSeatPose(V,k){const N=V.g.userData.npc,fit=V.seat.obj.userData.seatFit;let p=seatPose(V.kind==='drive'?'drive':V.kind,ME.t+(V.voice*7),N.recipe,fit);if(k>0)p=lerpP(p,PZ(),ezs(k));N.seatFit=fit;apply(N,p);}
+function vicSeatPose(V,k){const N=V.g.userData.npc,fit=V.seat.obj.userData.seatFit;let p=seatPose(V.kind==='drive'?'drive':V.kind,ME.t+(V.voice*7),N.recipe,fit);if(k>0)p=riseBlend(p,k,V.sg);N.seatFit=fit;apply(N,p);}
 function vicRemove(V){if(V.rag){ragKill(V.rag);V.rag=null;}if(V.blood){V.blood.forEach(b=>{if(b.parent)b.parent.remove(b);});V.blood=null;}scene.remove(V.node);V.g.userData.busy=false;V.node.remove(V.g);V.g.rotation.set(0,0,0);const i=VICTIMS.indexOf(V);if(i>=0)VICTIMS.splice(i,1);}
 function victimStep(dt){for(const V of VICTIMS.slice()){V.t+=dt;const v=V.v,g=V.g;
     if(V.mode==='seat'){vicPlaceCar(V);vicSeatPose(V,0);if(V.dead){g.rotateZ(-0.35);g.rotateX(-V.sg*0.3);}if(V.kind==='drive'&&v.m.wheelObj&&!V.dead){try{wheelHands(g,v,0,1);}catch(e){}}
       if(V.delay!=null){V.delay-=dt;if(V.delay<=0){V.mode=V.dead?'thrown':'exit';V.t=0;V.from=V.pos.clone();if(V.door&&!V.door.gone)togglePart(V.door,true);}}continue;}
+    if(V.mode==='drag'){// in someone's hands (the carjack moves them); dropped if that stops
+      if(!ME.seq||ME.seq.vic!==V||ME.seq.ph!=='pull'){if(V.t>0.1)vicRag(V,new THREE.Vector3(0,0.3,0),new THREE.Vector3(0,0,0));}continue;}
     if(V.mode==='exit'){// out of their own door and away
       const u=Math.min(1,V.t/0.95),out=new THREE.Vector3(V.from.x+0.05,0,V.sg*(v.halfWid+0.85)),mid=new THREE.Vector3(V.from.x,V.from.y*0.6,V.sg*(v.halfWid+0.2));
       if(u<0.25){vicPlaceCar(V);vicSeatPose(V,0);V.rot=-V.sg*ezs(u/0.25)*0.9;g.rotation.y=V.rot;continue;}
@@ -16283,6 +16481,9 @@ function pedFight(p){p.mode='fight';p.t=0;p.punch=null;p.cool=0.4+Math.random()*
 const PLAYER={hp:100,hurtT:0,regenT:0};
 // a punch: wind back, a straight jab out to the target, back to the guard
 function punchArm(g,hand,u,target){g.updateMatrixWorld(true);const ext=u<0.22?-0.15*ezs(u/0.22):u<0.42?-0.15+1.15*ezs((u-0.22)/0.2):1-ezs((u-0.42)/0.58);
+  // the body throws it: hips and shoulders wind back, then turn through into it with the weight going forward
+  {const J=g.userData.npc.joints,sd=hand==='R'?-1:1,tw=sd*(0.5*Math.max(0,ext)-0.22*Math.max(0,-ext)/0.15);J.chest.rotation.y+=tw;J.hips.rotation.y+=tw*0.35;
+    J.spine.rotation.z-=0.14*Math.max(0,ext);J.head.rotation.y-=tw*0.7;J.hips.position.y-=0.025*Math.max(0,ext);g.updateMatrixWorld(true);}
   const fw=new THREE.Vector3(1,0,0).applyQuaternion(g.getWorldQuaternion(new THREE.Quaternion())),side=hand==='R'?-1:1,sv=new THREE.Vector3(0,0,side).applyQuaternion(g.getWorldQuaternion(new THREE.Quaternion()));
   const base=g.localToWorld(new THREE.Vector3(0.22,1.38,side*0.12));let tip=base.clone().addScaledVector(fw,0.18+0.45*Math.max(0,ext));
   if(target&&ext>0)tip.lerp(target,Math.min(1,ext)*0.6);
@@ -16309,7 +16510,7 @@ function playerPunchStep(dt){const it=ME.it,P=it.pl,pu=ME.punch;if(!pu)return;pu
   if(!pu.hit&&u>=0.4){pu.hit=true;const H=punchTarget(P.x,P.z,P.psi,1.15);if(H&&H.nw){sndPunch(null);nwMeleeOut(H,P.psi,18+Math.random()*9);}else if(H){if(VICTIMS.includes(H))vicHit(H,P.psi,18+Math.random()*9);else pedHit(H,P.psi,18+Math.random()*9,'player');}}
   if(u>=1)ME.punch=null;}
 // a punch lands on someone
-function pedHit(p,psi,dmg,by){if(p.call)callStop(p);p.hp-=dmg;p.lastBy=by;const dx=Math.cos(psi),dz=-Math.sin(psi);sndPunch(p);pedAlarm(p.x,p.z,22,p);
+function pedHit(p,psi,dmg,by){if(p.call)callStop(p);p.hp-=dmg;p.lastBy=by;const dx=Math.cos(psi),dz=-Math.sin(psi);try{const ps=p.psi;animFlinch(p.g,(dx*Math.cos(ps)-dz*Math.sin(ps))*1.5,(dx*Math.sin(ps)+dz*Math.cos(ps))*1.5);}catch(e){}sndPunch(p);pedAlarm(p.x,p.z,22,p);
   if(p.cop){if(by==='player')wCopPunched(p);if(p.hp<=0){pedRag(p,new THREE.Vector3(dx*2.4,0.7,dz*2.4),new THREE.Vector3(-dz,0,dx).multiplyScalar(-2.5),true);return;}p.hurt={t:0,dx,dz,side:Math.random()<0.5?1:-1};return;}
   if(by==='player'&&p.hp>0)crime('assault',p.x,p.z,{victim:p,veh:null});
   if(p.hp<=0||(p.hp<45&&Math.random()<0.35)){// down
@@ -16323,7 +16524,7 @@ function pedHit(p,psi,dmg,by){if(p.call)callStop(p);p.hp-=dmg;p.lastBy=by;const 
 function pedRag(p,vel,spin,dead){p.mode='rag';p.punch=null;p.hurt=null;if(p.call)callStop(p);if(dead){p.dead=true;p.hp=0;pedAlarm(p.x,p.z,40,p);try{wPedKilled(p);}catch(e){console.warn(e);}}
   p.rag=ragMake(p.g,p.node,vel,spin,R=>{p.rag=null;p.x=R.gx;p.z=R.gz;p.y=R.gy;p.psi=R.psi;p.node.position.set(p.x,p.y,p.z);p.node.rotation.set(0,p.psi,0);
     p.g.position.set(0,0,0);p.g.rotation.set(0,0,0);npcState(p.g).v=0;
-    if(p.cop){p.mode='cop';if(p.cs)p.cs.st=WANT.hostileT>0?'cover':'chase';return;}
+    if(p.cop){p.mode='cop';if(p.cs)p.cs.st=WANT.hostileT>0?'cover':(WANT.runT||0)>0.4?'chase':'door';return;}   // back on his feet: after him only if he's running
     if(p.gun&&p.hp>30&&(p.lastBy==='player'||p.lastBy==='gun')&&!ME.dead)pedStartShoot(p);else if(p.brave&&p.hp>40&&p.lastBy==='player')pedFight(p);else pedFlee(p,ME.it.pl.x,ME.it.pl.z,0);});
   p.rag.lieFor=dead?1e9:1.4+Math.random()*2;}
 // a car into someone: how hard decides whether they get up
@@ -16372,7 +16573,9 @@ function pedStep(dt){if(!ME.it||MODE!=='play')return;const P=ME.it.pl;
     if(p.hurt){p.hurt.t+=dt;if(p.hurt.t>0.42)p.hurt=null;}
     if(p.mode==='stand'&&p.look){p.look.t-=dt;if(p.look.t<=0)p.look=null;}
     // move (the stride and the speed are one thing, as for you)
-    if(!far)npcPose(g,ME.t+p.voice*9,gait,dt);else npcState(g).v=gait;
+    if(!far){const fx=animFx(g);if(ME.it&&!p.dead&&p.mode!=='rag'){const P=ME.it.pl,dx=P.x-p.x,dz=P.z-p.z,dd=Math.hypot(dx,dz),rel=wrapA(Math.atan2(-dz,dx)-p.psi);
+        const want=(dd<6.5||(WP.aimPed===p))&&Math.abs(rel)<1.9&&p.mode!=='flee';fx.look=want?[rel,Math.atan2(P.y+1.5-(p.y+1.6),Math.max(0.5,dd))]:null;}else fx.look=null;
+      if(p.mode!=='shoot')fx.aim=0;npcPose(g,ME.t+p.voice*9,gait,dt);}else npcState(g).v=gait;
     const st=npcState(g),v=st.v<=1?st.v*1.4:1.4+(st.v-1)*3.25;spd=gait?v:0;
     if(p.hurt){const k=Math.max(0,1-p.hurt.t/0.42);p.x+=p.hurt.dx*1.1*k*dt;p.z+=p.hurt.dz*1.1*k*dt;}
     if(spd>0){const ox=p.x,oz=p.z;p.x+=Math.cos(p.psi)*spd*dt;p.z-=Math.sin(p.psi)*spd*dt;if(insideBuilding(p.x,p.z)){p.x=ox;p.z=oz;p.psi+=1.2*p.turn;}wallPush(p,0.28,p.y+0.9);}
@@ -16387,7 +16590,7 @@ function pedStep(dt){if(!ME.it||MODE!=='play')return;const P=ME.it.pl;
     else if(p.mode==='cower'||p.mode==='handsup'){pedReactPose(p,dt);}
     else if(p.mode==='fight'){if(p.punch){p.punch.t+=dt;const u=p.punch.t/0.5;punchArm(g,p.punch.hand,Math.min(1,u),ME.it.g.localToWorld(new THREE.Vector3(0,1.5,0)));
         if(!p.punch.hit&&u>=0.42){p.punch.hit=true;const dx=P.x-p.x,dz=P.z-p.z,dd=Math.hypot(dx,dz)||1,a=Math.abs(wrapA(Math.atan2(-dz,dx)-p.psi));
-          if(dd<1.2&&a<0.8&&!ME.car&&!ME.rag){playerHurt(7+Math.random()*7,dx/dd,dz/dd);sndPunch(null);}}
+          if(dd<1.2&&a<0.8&&!ME.car&&!ME.rag){playerHurt(7+Math.random()*7,dx/dd,dz/dd);sndPunch(null);try{const ps=P.psi,qx=dx/dd,qz=dz/dd;animFlinch(ME.it.g,(qx*Math.cos(ps)-qz*Math.sin(ps))*1.4,(qx*Math.sin(ps)+qz*Math.cos(ps))*1.4);}catch(e){}}}
         if(u>=1){p.punch=null;p.cool=0.55+Math.random()*0.8;}}
       else guardArms(g,0.9);}
     else if(p.mode==='stand'){const G=p.grp;
@@ -17135,7 +17338,7 @@ function wpReload(){const id=wpCur();if(!id||WP.reload||WP.seq)return;const W=WP
   WP.reload={id,t:0,dur,ev:[{t:0.08*dur,f:()=>sndMag('out',W)},{t:0.62*dur,f:()=>sndMag('in',W)},{t:0.86*dur,f:()=>{if(empty||W.rifle)sndMag(W.rifle?'bolt':'slide',W);}}]};}
 function wpFire(){const id=wpCur(),W=WPN[id],o=wpObj(WP.eq);if(!o)return;
   if((SAVE.mag[id]||0)<=0){sndDry();WP.lastShot=WP.clock;if(SAVE.ammo[W.cal]>0)WP.arT=0.3;return;}
-  WP.lastShot=WP.clock;WP.fireT=0;SAVE.mag[id]--;if(SAVE.mag[id]===0)WP.locked[id]=!W.rifle;
+  WP.lastShot=WP.clock;WP.fireT=0;SAVE.mag[id]--;try{animKick(ME.it.g,W.rifle?1.0:0.75);}catch(e){}if(SAVE.mag[id]===0)WP.locked[id]=!W.rifle;
   // the gun has to be up and pointing before the bullet leaves: from the hip it comes up first (a moment)
   ME.it.node.updateMatrixWorld(true);o.g.updateMatrixWorld(true);
   const M=o.g.localToWorld(o.ud.muzzle.clone()),T=WP.aimTgt||crossTarget();
@@ -17391,12 +17594,12 @@ function personShot(h,D,W,o){const T=h.who,zone=h.zone,P=h.point;let dmg=W.dmg*(
   if(p.hp<=0||zone==='head'){pedDropGun(p);pedRag(p,D.clone().multiplyScalar(zone==='head'?2.8:2.2).add(new THREE.Vector3(0,0.35,0)),new THREE.Vector3(-D.z,0,D.x).multiplyScalar(zone==='chest'?2.5:3.5),true);bloodPool(p);return;}
   if(zone==='leg'&&Math.random()<0.6){pedRag(p,D.clone().multiplyScalar(1.1).add(new THREE.Vector3(0,0.25,0)),new THREE.Vector3(-D.z,0,D.x).multiplyScalar(2),false);p.limp=true;return;}
   // a flinch away from the hit, the body twisting with it, then they act
-  p.hurt={t:0,dx:D.x*0.8,dz:D.z*0.8,side:Math.random()<0.5?1:-1};p.punch=null;
+  p.hurt={t:0,dx:D.x*0.8,dz:D.z*0.8,side:Math.random()<0.5?1:-1};p.punch=null;try{const ps=p.psi,m=W.rifle?1.6:1.2;animFlinch(p.g,(D.x*Math.cos(ps)-D.z*Math.sin(ps))*m,(D.x*Math.sin(ps)+D.z*Math.cos(ps))*m);}catch(e){}
   if(p.cop){wCopHurt(p,byMe);return;}
   if(p.gun&&(p.brave||p.hp>50)&&byMe)pedStartShoot(p);else if(byMe&&ME.it)pedFlee(p,ME.it.pl.x,ME.it.pl.z,0.15);else if(o&&o.shooter)pedFlee(p,o.shooter.x,o.shooter.z,0.15);}
 // the ragdoll takes the bullet: the point nearest the hit is pushed along it
 function ragPush(R,h,D,W){if(!R||!R.p)return;let bi=0,bd=1e9;R.p.forEach((q,i)=>{const d=q.distanceTo(h.point);if(d<bd){bd=d;bi=i;}});const k=(W.rifle?3.2:2.2)/120;R.prev[bi].addScaledVector(D,-k);if(R.mode!=='fall'){R.mode='fall';R.t=0;R.still=0;}}
-function playerShot(dmg,D,zone,o){if(ME.dead)return;PLAYER.hp-=dmg*0.7;PLAYER.hurtT=0.35;PLAYER.regenT=8;hpShow();hurtFlash(0.8);
+function playerShot(dmg,D,zone,o){if(ME.dead)return;if(!ME.car&&ME.it)try{const ps=ME.it.pl.psi;animFlinch(ME.it.g,(D.x*Math.cos(ps)-D.z*Math.sin(ps))*1.3,(D.x*Math.sin(ps)+D.z*Math.cos(ps))*1.3);}catch(e){}PLAYER.hp-=dmg*0.7;PLAYER.hurtT=0.35;PLAYER.regenT=8;hpShow();hurtFlash(0.8);
   if(!ME.car){ME.pitch=clamp(ME.pitch-(0.03+Math.random()*0.045),-0.55,1.25);ME.yaw+=(Math.random()<0.5?-1:1)*(0.03+Math.random()*0.05);}WP.bloom=Math.min(0.09,WP.bloom+0.04);
   if(PLAYER.hp<=0||zone==='head'&&Math.random()<0.5){PLAYER.hp=0;hpShow();playerDie(D);}}
 
@@ -17418,7 +17621,7 @@ function pedShootStep(p,dt){const P=ME.it.pl,S=p.sh,d=Math.hypot(P.x-p.x,P.z-p.z
   return gait;}
 function pedShootArms(p){if(!p.gobj&&p.sh&&p.sh.draw<0.45){// hand to the waistband
     const g=p.g;g.updateMatrixWorld(true);armTo(g,'L',g.localToWorld(new THREE.Vector3(-0.02,1.0,0.2)),ezs(p.sh.draw/0.45),new THREE.Vector3(-0.5,-1,0.6));return;}
-  if(!p.gobj)return;const g=p.g,N=g.userData.npc;g.updateMatrixWorld(true);const P=ME.it.pl,head=N.joints.head.getWorldPosition(_V()),tgt=_V().set(P.x,P.y+1.2,P.z);
+  if(!p.gobj)return;const g=p.g,N=g.userData.npc;animFx(g).aim=Math.min(1,p.sh.draw/0.9);g.updateMatrixWorld(true);const P=ME.it.pl,head=N.joints.head.getWorldPosition(_V()),tgt=_V().set(P.x,P.y+1.2,P.z);
   const dir=tgt.clone().sub(head).normalize(),up0=Math.min(1,p.sh.draw/0.9),G=head.clone().addScaledVector(dir,0.5).addScaledVector(UPV,-0.08),Q=quatDir(dir);
   if(p.sh.kick>0){Q.multiply(qz(p.sh.kick));p.sh.kick*=0.82;}
   const h=handFor(G,Q,P_HG),qc=N.joints.chest.getWorldQuaternion(new THREE.Quaternion());applyArm(N.arms.L,solveArm(N.arms.L,h.W,new THREE.Vector3(-0.35,-1,0.75).applyQuaternion(qc).normalize()),h.Qh,up0);
@@ -17427,7 +17630,7 @@ function pedFire(p,d){const o=p.gobj;if(!o)return;p.g.updateMatrixWorld(true);co
   // they aim at your middle; how close it goes depends on the range and on you moving
   const tgt=ME.car?_V().set(ME.car.ph.x,(ME.car.vy_||ME.car.y)+1.0,ME.car.ph.z):_V().set(P.x,P.y+1.15,P.z);const mv=Math.hypot(PED.u||0,PED.v||0);
   const err=0.03+d*0.0045+mv*0.012+(p.limp?0.02:0);let D=tgt.sub(M).normalize();D=jitter(D,err);
-  p.sh.kick=0.12;shoot(M,D,{by:'ped',W:WPN[p.gun],shooter:p,from:o});}
+  p.sh.kick=0.12;try{animKick(p.g,0.75);}catch(e){}shoot(M,D,{by:'ped',W:WPN[p.gun],shooter:p,from:o});}
 // someone close to the shooting (not armed) ducks down where they are, then runs
 function pedCower(p,dur){p.mode='cower';p.t=0;p.cowerT=dur||(2.5+Math.random()*3);}
 // a gun pointed at them: hands go up, they stay put while you keep aiming; then they run
@@ -19709,7 +19912,7 @@ function copSeatAnim(p,k){const cs=p.cs,a=p.unit.a,g=p.g,N=g.userData.npc,S=cs.s
   // facing: forward in the seat, swung round to face out the door, then back toward the front as they stand
   const psi=a.psi+sg*(Math.PI/2)*(turn*(1-0.55*ezs(clamp((w-0.6)/0.4,0,1))));
   p.x=W.x;p.z=W.z;p.y=y;p.psi=psi;p.node.position.set(W.x,y,W.z);p.node.rotation.set(0,psi,0);g.position.set(0,0,0);g.rotation.set(0,0,0);
-  N.seatFit=fit;let pose=seatPose(p.seat==='driver'?'drive':'sit',ME.t+p.voice*7,N.recipe,fit);pose=lerpP(pose,PZ(),ezs(clamp((w-0.15)/0.75,0,1)));apply(N,pose);npcState(g).v=0;}
+  N.seatFit=fit;let pose=seatPose(p.seat==='driver'?'drive':'sit',ME.t+p.voice*7,N.recipe,fit);pose=riseBlend(pose,clamp((w-0.1)/0.85,0,1),sg);apply(N,pose);npcState(g).v=0;}
 // back in the car
 function copBoardStart(p){const cs=p.cs;cs.st='in';cs.t=0;cs.seatL=wSeatLocal(p.unit.a,p.seat);if(p.gobj){if(p.gobj.m.parent)p.gobj.m.parent.remove(p.gobj.m);p.gobj=null;cs.draw=0;}}
 function copBoard(p){const u=p.unit,a=u.a;if(p.seatMesh&&uSeats(u)[p.seat].alive)p.seatMesh.visible=true;uSeats(u)[p.seat].hp=Math.min(100,p.hp);copRemove(p);}
@@ -19800,14 +20003,14 @@ function wCopStep(p,dt,far){const me=wMe(),cs=p.cs,u=p.unit,a=u.a,g=p.g;cs.t+=dt
   if(aim||cs.draw>0){cs.draw=Math.min(1.2,cs.draw+dt*(aim?1:-1.5));p.sh.draw=cs.draw;if(!p.gobj&&cs.draw>0.45){p.gobj=gunMount('c10');N.arms.L.wr.add(p.gobj.m);p.gobj.m.position.copy(P_HG);p.gobj.m.quaternion.copy(Q_HG);sndDraw('hand','draw',p.node.position);}
     if(aim&&!crouch)copArms(p,me);else if(crouch&&p.gobj){g.updateMatrixWorld(true);armTo(g,'L',g.localToWorld(V3().set(0.32,lerp(1.15,0.72,cs.ck),0.12)),0.9);}}
   if(p.hurt){p.hurt.t+=dt;const k=Math.sin(Math.min(1,p.hurt.t/0.42)*Math.PI);N.joints.head.rotation.y+=p.hurt.side*0.5*k;N.joints.spine.rotation.z+=0.22*k;if(p.hurt.t>0.42)p.hurt=null;}}
-function copArms(p,me){const g=p.g,N=g.userData.npc;if(!p.gobj){if(p.sh.draw<0.45){g.updateMatrixWorld(true);armTo(g,'L',g.localToWorld(V3().set(-0.02,1.0,0.2)),ezs(p.sh.draw/0.45),V3().set(-0.5,-1,0.6));}return;}
+function copArms(p,me){const g=p.g,N=g.userData.npc;animFx(g).aim=p.gobj?Math.min(1,p.sh.draw/0.9):0;if(!p.gobj){if(p.sh.draw<0.45){g.updateMatrixWorld(true);armTo(g,'L',g.localToWorld(V3().set(-0.02,1.0,0.2)),ezs(p.sh.draw/0.45),V3().set(-0.5,-1,0.6));}return;}
   g.updateMatrixWorld(true);const head=N.joints.head.getWorldPosition(V3()),tgt=V3().set(me.x,me.y+(me.car?0.9:1.15),me.z);
   const dir=tgt.clone().sub(head).normalize(),up0=Math.min(1,p.sh.draw/0.9),G=head.clone().addScaledVector(dir,0.5).addScaledVector(UPV,-0.08),Q=quatDir(dir);
   if(p.sh.kick>0){Q.multiply(qz(p.sh.kick));p.sh.kick*=0.82;}
   const h=handFor(G,Q,P_HG),qc=N.joints.chest.getWorldQuaternion(new THREE.Quaternion());applyArm(N.arms.L,solveArm(N.arms.L,h.W,new THREE.Vector3(-0.35,-1,0.75).applyQuaternion(qc).normalize()),h.Qh,up0);
   const W=G.clone().add(SUPPORT.clone().applyQuaternion(Q)).sub(new THREE.Vector3(0,-0.06,0.02).applyQuaternion(Q));applyArm(N.arms.R,solveArm(N.arms.R,W,new THREE.Vector3(-0.35,-1,-0.75).applyQuaternion(qc).normalize()),null,up0*0.9);}
 function copShoot(p,dt,d){const cs=p.cs,me=wMe();cs.fire-=dt;if(!p.gobj||cs.draw<0.9||cs.mag<=0||!p.see)return;const want=Math.atan2(-(me.z-p.z),me.x-p.x);if(Math.abs(wrapA(want-p.psi))>0.3)return;
-  if(cs.fire>0)return;cs.fire=0.32+Math.random()*0.55;cs.mag--;p.sh.kick=0.12;p.g.updateMatrixWorld(true);
+  if(cs.fire>0)return;cs.fire=0.32+Math.random()*0.55;cs.mag--;p.sh.kick=0.12;try{animKick(p.g,0.75);}catch(e){}p.g.updateMatrixWorld(true);
   const M=p.gobj.g.localToWorld(p.gobj.ud.muzzle.clone()),tgt=V3().set(me.x,me.y+(me.car?0.95:1.15),me.z);let D=tgt.sub(M).normalize();D=jitter(D,(0.02+d*0.0025+me.spd*0.008)*(cs.mov?1.9:1)*(1+1.3*Math.exp(-(cs.aimT||0)*1.4)));
   shoot(M,D,{by:'cop',W:WPN.c10,shooter:p,from:p.gobj,skipCar:p.unit.a});}
 // somewhere to crouch: the far side of the nearest car (from the shooter), close enough to run to
@@ -20224,6 +20427,12 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Animation overhaul: walking and running plant the feet and roll heel to toe; bodies lean into turns, starts and stops; every change of pose blends smoothly',
+    'Carjacking: you lean into the car, grab the driver by the shoulder and shirt, and haul them out with your hands on them while they flinch and grab at your wrist',
+    'Guns: a real shooting stance (feet staggered, knees soft), recoil through the shoulders, stepping sideways and back with the gun up; police and armed people too',
+    'Getting in and out of cars: weight forward and a push up out of the seat (you, police, drivers)',
+    'Punches turn the hips and shoulders into the blow; hits (punches and bullets) knock the body the way they came',
+    'People in the street look at you when you come close or point a gun at them',
     'Online: people falling, tumbling over a bonnet, lying hurt or dead, getting up: everyone sees exactly the same fall, joint for joint',
     'Online: other players climbing into and out of cars, falling, crouching, aiming and punching look exactly as they do on their own screen',
     'Online: officers at work (getting out, taking cover, aiming, arresting) look the same to everyone',
@@ -20942,6 +21151,7 @@ function tick(){requestAnimationFrame(tick);if(TESTMODE)return;const now=perform
     PF.hit={gap:Math.round(gap),top,tv:Math.round(tv),ev,at:now};console.log('[hitch] '+PF.hit.gap+' ms, longest part: '+top+' '+PF.hit.tv+' ms'+ev,JSON.stringify(prev,(k,v)=>typeof v==='number'?Math.round(v):v));}}
 function step(dt){if(MODE==='play'&&WP.wheel)dt*=0.3;const frozen=(MODE==='photo'&&!PHOTO.run)||MODE==='map';if(MODE!=='pause'&&!frozen&&!(MODE==='settings'&&settingsFrom==='pause'))TR.clock(dt);
   pollPad();
+  window.ANIM_T=(window.ANIM_T||0)+dt;   // the clock every body's pose blending runs on
   if((MODE==='play'||(MODE==='photo'&&PHOTO.run))&&ME.it){ME.t+=dt;
     if(PADS.on){if(ME.seq&&carCamOn()){if(PADS.rx||PADS.ry){L.camDrag(true);L.camLook(PADS.rx*dt*700,PADS.ry*dt*450);clearTimeout(ME.dragT);ME.dragT=setTimeout(()=>L.camDrag(false),700);}}
       else{ME.yaw-=PADS.rx*dt*2.6;ME.pitch=clamp(ME.pitch+PADS.ry*dt*1.8,-0.55,1.25);}}
