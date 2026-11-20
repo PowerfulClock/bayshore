@@ -14918,7 +14918,7 @@ function moveInput(){let f=(KEYS.KeyW||KEYS.ArrowUp?1:0)-(KEYS.KeyS||KEYS.ArrowD
   if(STAM.ex)run=false;   // out of breath
   return {f,r,run};}
 // knocked down: the ragdoll has you until you're back on your feet
-function knockDown(h){const it=ME.it,P=it.pl;if(ME.rag)return;pfEvent('a knock-down');
+function knockDown(h){const it=ME.it,P=it.pl;if(ME.rag)return;if(NET.ride&&!NET.ride.seq){if(!ME.dead&&!h.out)return;netRideOff(true);}pfEvent('a knock-down');
   ME.rag=ragMake(it.g,it.node,ragHitVel(h),ragHitSpin(h),R=>{ME.rag=null;P.x=R.gx;P.z=R.gz;P.y=R.gy;P.psi=R.psi;P.vy=0;P.ride=null;
     it.node.position.set(P.x,P.y,P.z);it.node.rotation.set(0,P.psi,0);it.g.position.set(0,0,0);it.g.rotation.set(0,0,0);npcState(it.g).v=0;});
   ME.rag.lieFor=1.6;sndHitPerson(new THREE.Vector3(P.x,P.y+1,P.z),h.spd);}
@@ -15495,10 +15495,11 @@ function camBlend(dur){CAMB.from={p:camera.position.clone(),q:camera.quaternion.
 function camApply(dt){const T=camTmp;let k=1;if(CAMB.from){CAMB.t+=dt;k=ezs(CAMB.t/CAMB.dur);}
   if(k>=1||!CAMB.from){CAMB.from=null;camera.position.copy(T.position);camera.quaternion.copy(T.quaternion);if(camera.fov!==T.fov){camera.fov=T.fov;camera.updateProjectionMatrix();}return;}
   camera.position.copy(CAMB.from.p).lerp(T.position,k);camera.quaternion.copy(CAMB.from.q).slerp(T.quaternion,k);camera.fov=lerp(CAMB.from.f,T.fov,k);camera.updateProjectionMatrix();}
-const carCamOn=()=>!!(DRIVE||(ME.seq&&ME.seq.kind==='in'&&!ME.seq.foot));
+const rideCar=()=>{if(typeof NET==='undefined'||!NET.ride||NET.ride.seq)return null;const R=NET.rem.get(NET.ride.id);return R&&R.car&&R.car.ph?R.car:null;};
+const carCamOn=()=>!!(DRIVE||(ME.seq&&ME.seq.kind==='in'&&!ME.seq.foot)||rideCar());
 function placeCam(dt){camTmp.aspect=camera.aspect;camTmp.far=camera.far;camTmp.updateProjectionMatrix();
   if(WP.dby&&ME.car){dbyCam(camTmp,dt);camApply(dt);camShake(dt);return;}
-  if(carCamOn()){const v=DRIVE||ME.car;L.camDrive(v.ph,camTmp,dt);camTmp.position.y+=v.vy_||v.y;camApply(dt);return;}
+  if(carCamOn()){const v=DRIVE||ME.car||rideCar();L.camDrive(v.ph,camTmp,dt);camTmp.position.y+=v.vy_||v.y;camApply(dt);return;}
   playCam(dt,camTmp);camApply(dt);camShake(dt);}
 function camShake(dt){const k=CAMSHAKE.k;if(k<0.002)return;CAMSHAKE.k*=Math.exp(-dt*16);camera.position.x+=(Math.random()-0.5)*0.025*k;camera.position.y+=(Math.random()-0.5)*0.025*k;camera.rotateZ((Math.random()-0.5)*0.006*k);}
 
@@ -16540,7 +16541,7 @@ function hpShow(){let el=document.getElementById('ghp');if(!el){el=document.crea
   el.firstChild.style.width=Math.max(0,PLAYER.hp)+'%';el.style.opacity=PLAYER.hp<100?1:0;}
 
 /* ---- every frame ---- */
-function pedStep(dt){if(!ME.it||MODE!=='play')return;const P=ME.it.pl;
+function pedStep(dt){if(!ME.it||!liveMode())return;const P=ME.it.pl;
   // in and out of the world, unseen
   PEDT.t-=dt;if(PEDT.t<=0){PEDT.t=PEDT.warm?0:0.25;const tg=pedTarget();let n=0;
     const cnt=()=>NET.on?PEDS.filter(p=>Math.hypot(p.x-pedHere().x,p.z-pedHere().z)<180).length+nwPedNear(pedHere(),180):PEDS.length;
@@ -17686,7 +17687,7 @@ function playerDie(D){if(ME.dead)return;try{const w0=g$('gwasted');if(w0){w0.cla
   const lost=SAVE.cash;SAVE.cash=0;saveGame();
   const cv=renderer.domElement;cv.style.transition='filter 1.2s';cv.style.filter='grayscale(1) contrast(1.15) brightness(0.8)';
   const w=g$('gwasted');w.hidden=false;g$('gwastedSub').textContent=lost>0?'You lost '+fmt$(lost)+' in cash':'';requestAnimationFrame(()=>w.classList.add('on'));sndWasted();
-  setTimeout(()=>{if(!ME.dead||MODE!=='play')return;RESPAWN=true;if(document.pointerLockElement)document.exitPointerLock();toSpawn();respawnTexts(true);},4600);}
+  setTimeout(()=>{if(!ME.dead||!liveMode())return;RESPAWN=true;if(document.pointerLockElement)document.exitPointerLock();toSpawn();respawnTexts(true);},4600);}
 function respawnTexts(on){const sp=g$('spawn');if(!sp)return;const h2=sp.querySelector('.chead h2'),big=sp.querySelector('.chead .big');
   if(on){h2.textContent=WANT.bustedScreen?'Busted':'Wasted';big.textContent='Respawn';g$('spawnGo').textContent='Respawn';g$('spawnBack').hidden=true;}
   else{h2.textContent='Where to start';big.textContent='Start point';g$('spawnGo').textContent='Start';g$('spawnBack').hidden=false;}}
@@ -18569,10 +18570,10 @@ function netState(){const it=ME.it;if(!it)return null;const P=it.pl,v=DRIVE;cons
     o.x=o.c.x;o.z=o.c.z;o.y=o.c.y;
     // anyone riding with me (I keep their seats for them)
   }else{o.x=+P.x.toFixed(2);o.y=+P.y.toFixed(2);o.z=+P.z.toFixed(2);o.h=+P.psi.toFixed(3);const g=npcState(it.g).v||0;o.g=+g.toFixed(2);if(ME.dead)o.d=1;if(ME.rag)o.rg=1;
-    {const w=wpCur();if(w)o.wp=w;else if(MEL.on&&MEL.id)o.wp='m:'+MEL.id;}if(o.wp&&wpAiming()){o.am=1;const d=camera.getWorldDirection(V3());o.ay=+Math.atan2(-d.z,d.x).toFixed(3);o.ap=+Math.asin(clamp(d.y,-1,1)).toFixed(3);}
+    {const N=it.g.userData.npc;let w=null;for(const sl of ['hand','long']){const ob=WP.obj&&WP.obj[sl];if(ob&&ob.m&&ob.m.parent===N.arms.L.wr)w=SAVE[sl];}if(w)o.wp=w;else if(MEL.on&&MEL.id)o.wp='m:'+MEL.id;}if(o.wp&&wpAiming()){o.am=1;const d=camera.getWorldDirection(V3());o.ay=+Math.atan2(-d.z,d.x).toFixed(3);o.ap=+Math.asin(clamp(d.y,-1,1)).toFixed(3);}
     if(COVER.on&&!wpAiming())o.cv=1;if(ROB.on&&ROB.a)o.rb=SHOP.atms.indexOf(ROB.a);if(WANT.surr&&WANT.surr.on)o.hu=1;}
   // on foot, getting in or out, falling: the body exactly as it is (not while sitting in a seat)
-  if(!(v&&!ME.seq)&&!(NET.ride&&!NET.ride.seq))try{const z=nwPoseOut(it.g);if(z)o.pz=z;}catch(e){}
+  if(!(v&&!ME.seq)&&!(NET.ride&&!NET.ride.seq))try{const z=NET.pzC&&ME.t-(NET.pzT||0)<0.2?NET.pzC:nwPoseOut(it.g);if(z)o.pz=z;}catch(e){}
   if(NW.pkGone.size)o.pk=[...NW.pkGone];{const pc=nwParkedMine();if(pc)o.pc=pc;}
   if(NET.jk)o.jk=NET.jk;if(NET.jkAck)o.ja=NET.jkAck;return o;}
 function netSend(dt){if(!NET.room)return;NET.sendT-=dt;const moving=!!(DRIVE&&Math.hypot(DRIVE.ph.u,DRIVE.ph.v)>0.3)||(ME.it&&(npcState(ME.it.g).v||0)>0.05)||wpAiming()||!!ME.punch||ROB.on||!!ME.seq;
@@ -18590,7 +18591,7 @@ function netRemCar(R,c){const ck=c.k+'|'+c.col;if(R.car&&R.carKey===ck&&!(c.u&&R
 function netRemCop(R,i){if(R.cops[i])return R.cops[i];const v=buildVehicle(COP_KEYS[0],'#f3f5f1');if(!v)return null;scene.add(v.node);R.cops[i]=v;v.cur=null;return v;}
 const _nq=new THREE.Vector3();
 function netRemStep(dt){const seen=new Set(),aud=[];
-  for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number')continue;seen.add(p.id);const R=netRem(p.id);R.pr=pr;netRemBody(R,(pr.ri|0)%Math.max(1,NPCS.length));const g=R.g;
+  for(const p of NET.peers){const pr=p.pr;if(!pr||typeof pr.x!=='number'||!isFinite(pr.x)){if(pr)window.__badPr=JSON.stringify(pr).slice(0,300);continue;}seen.add(p.id);const R=netRem(p.id);R.pr=pr;netRemBody(R,(pr.ri|0)%Math.max(1,NPCS.length));const g=R.g;
     // in their own car: placed, then posed by the game's own car code (suspension, wheels, steering, lights, brake lights, doors)
     // their snapshots, by their clock (a car's and a person's kept apart: getting in or out starts afresh)
     const kind=pr.c&&typeof pr.c.x==='number'?'c':'f';if(R.kind!==kind){R.kind=kind;R.pb=[];}
@@ -18621,7 +18622,8 @@ function netRemStep(dt){const seen=new Set(),aud=[];
       netHold(R,pr.wp||null);npcPose(g,ME.t+R.ri,pr.g||0,dt);netBodyStep(R,pr,dt);}}
   window.BAY_NETAUD=aud;
   for(const R of NET.rem.values())if(R.left){if(performance.now()-R.left.t>3000){try{alarmStop(R.left.v);}catch(e){}scene.remove(R.left.v.node);R.left=null;}else try{stepPanels(R.left.v.m,dt);}catch(e){}}
-  for(const [id,R] of NET.rem)if(!seen.has(id)){netRemDrop(R);NET.rem.delete(id);if(NET.ride&&NET.ride.id===id)netRideOff();}}
+  // missing from a list for a moment isn't gone: only after a few seconds (no one's car vanishing from under them)
+  for(const [id,R] of NET.rem){if(seen.has(id)){R.lost=0;continue;}R.lost=(R.lost||0)+dt;if(R.lost<3)continue;window.__remDrop=(window.__remDrop||0)+1;netRemDrop(R);NET.rem.delete(id);if(NET.ride&&NET.ride.id===id)netRideOff(true);}}
 // what they hold (a gun, a bat), where they aim, a punch or a swing, prying an ATM, hands up
 function netHold(R,id){if(R.holdId===id)return;if(R.hold&&R.hold.parent)R.hold.parent.remove(R.hold);R.hold=null;R.holdId=id;if(!id||!R.g)return;
   try{const N=R.g.userData.npc,m=new THREE.Group();
@@ -18687,14 +18689,26 @@ function netEnterStep(Q,v,dt){const it=ME.it,g=it.g,r=Q.r;Q.t+=dt;const next=ph=
   if(Q.ph==='close'){Q.pos.copy(Q.sL);netSitPose(g,Q.S,0);bodyAt(it,v,Q.pos,0);const f=doorFrac(r);if(f>0.02)armTo(g,r.hand,pullW(r),1,armPole(r));
     if(f<=0.02||Q.t>1.4)return true;return;}
   return true;}
-function netRideOff(){const r=NET.ride;NET.ride=null;if(!ME.it)return;const R=r&&NET.rem.get(r.id),P=ME.it.pl;ME.it.g.position.set(0,0,0);ME.it.g.rotation.set(0,0,0);
-  if(R&&R.car){const v=R.car,psi=v.node.rotation.y,s=/L$|driver/.test(r.seat)?-1:1;P.x=v.node.position.x+Math.sin(psi)*s*(1.6)*1;P.z=v.node.position.z+Math.cos(psi)*s*1.6;}
-  P.y=groundAt(P.x,P.z,P.y+2).y;P.vy=0;place();}
-function netRideStep(dt){const r=NET.ride,R=NET.rem.get(r.id);if(!R||!R.car||!R.pr||!R.pr.c){netRideOff();return false;}const it=ME.it,v=R.car,S=(v.m.seats||[]).find(q=>q.name===r.seat);if(!S){netRideOff();return false;}
-  if(r.seq){let done=false;try{done=netEnterStep(r.seq,v,dt);}catch(e){console.warn('enter',e);done=true;}if(!done)return true;r.seq=null;}
+// out of their car: beside your door (not in the car's way), and if it's going quickly, you tumble along the road
+function netRideOff(silent){const r=NET.ride;NET.ride=null;try{window.__rideEnd=(new Error()).stack.split('\n').slice(1,5).join(' | ');}catch(e){}if(!ME.it)return;const R=r&&NET.rem.get(r.id),P=ME.it.pl;ME.it.g.position.set(0,0,0);ME.it.g.rotation.set(0,0,0);let vel=null;
+  const vR=R&&(R.car||(R.left&&R.left.v));if(vR){const v=vR,psi=v.node.rotation.y,S=(v.m.seats||[]).find(q=>q.name===r.seat),sl=S?seatLocal(v,S):null,s=sl?(sl.z<0?-1:1):(/L$|driver/.test(r.seat)?-1:1),
+      off=(v.halfWid||0.95)+0.65,fx=sl?sl.x:0,c=Math.cos(psi),sn=Math.sin(psi);
+    P.x=v.node.position.x+c*fx+sn*s*off;P.z=v.node.position.z-sn*fx+c*s*off;P.psi=psi;
+    const u=v.ph?v.ph.u||0:0;if(Math.abs(u)>4)vel={vx:c*u*0.85,vz:-sn*u*0.85,spd:Math.abs(u)*0.85,out:true};}
+  P.y=groundAt(P.x,P.z,P.y+2).y;P.vy=0;ME.it.node.visible=true;place();try{L.camReset();}catch(e){}
+  if(vel&&!silent)try{knockDown(vel);}catch(e){}}
+// sitting in their seat, exactly where the seat is this frame
+function netRidePlace(){const r=NET.ride;if(!r||r.seq)return false;const R=NET.rem.get(r.id);if(!R||!R.car)return false;const it=ME.it,v=R.car,S=(v.m.seats||[]).find(q=>q.name===r.seat);if(!S)return false;
   v.node.updateMatrixWorld(true);const P=it.pl;P.x=v.node.position.x;P.z=v.node.position.z;P.y=v.node.position.y;P.psi=v.node.rotation.y;
-  it.node.position.copy(v.node.position);it.node.rotation.set(0,P.psi,0);const p=seatLocal(v,S);it.g.position.copy(p);it.g.rotation.set(0,0,0);
+  PED.x=P.x;PED.z=P.z;PED.y=P.y;PED.u=v.ph?v.ph.u||0:0;PED.psi=P.psi;
+  it.node.position.copy(v.node.position);it.node.quaternion.copy(v.node.quaternion);const p=seatLocal(v,S);it.g.position.copy(p);it.g.rotation.set(0,0,0);it.node.visible=true;
   const N=it.g.userData.npc,fit=S.obj.userData.seatFit;N.seatFit=fit;try{apply(N,seatPose('sit',ME.t,N.recipe,fit));}catch(e){}return true;}
+function netRideStep(dt){const r=NET.ride,R=NET.rem.get(r.id);
+  // their car gone from view for a moment (a late packet, a pause): stay in the seat a little while before giving up
+  if(!R||!R.car||!R.pr||!R.pr.c){r.lostT=(r.lostT||0)+dt;if(r.lostT<(R&&R.pr&&!R.pr.c?0.6:4)&&!r.seq)return true;netRideOff(true);return false;}r.lostT=0;
+  const v=R.car,S=(v.m.seats||[]).find(q=>q.name===r.seat);if(!S){netRideOff(true);return false;}
+  if(r.seq){let done=false;try{done=netEnterStep(r.seq,v,dt);}catch(e){console.warn('enter',e);done=true;}if(!done)return true;r.seq=null;try{L.camReset();camBlend(0.8);}catch(e){}}
+  netRidePlace();return true;}
 /* ---- taking it: they're pulled out and the car is mine ---- */
 function netJack(R){if(!R||!R.pr||!R.pr.c)return;NET.evN++;NET.jk={to:R.id,n:NET.evN};NET.jkT=2.5;NET.jkR=R;NET.sendT=0;toast('Pulling '+(R.pr.n||'them')+' out…');}
 function netJackStep(dt){
@@ -19087,7 +19101,7 @@ let NW_BG=null;
 function nwBgSetup(){if(NW_BG!==null)return;NW_BG=false;
   try{const src='let t=null;onmessage=e=>{clearInterval(t);t=null;if(e.data>0)t=setInterval(()=>postMessage(0),e.data);};';
     NW_BG=new Worker(URL.createObjectURL(new Blob([src],{type:'text/javascript'})));let last=performance.now();
-    NW_BG.onmessage=()=>{const now=performance.now(),dt=Math.min(0.1,(now-last)/1000);last=now;if(document.hidden&&NET.on&&MODE==='play')try{step(dt);}catch(e){}};}catch(e){NW_BG=false;}
+    NW_BG.onmessage=()=>{const now=performance.now(),dt=Math.min(0.1,(now-last)/1000);last=now;if(document.hidden&&NET.on&&liveMode())try{step(dt);}catch(e){}};}catch(e){NW_BG=false;}
   document.addEventListener('visibilitychange',()=>{if(NW_BG)NW_BG.postMessage(document.hidden&&NET.on?50:0);});}
 
 /* ===========================================================================
@@ -19255,7 +19269,7 @@ const W_MIN=[0,1,2,3,4,6,8],
 const wDark=()=>{const T=typeof todNow!=='undefined'?todNow:null;return T&&T.lamps>0?clamp(T.lamps,0,1):0;};
 
 /* ---------------------------------------------------------------- the player, as the police see them */
-function wMe(){const it=ME.it;if(!it)return null;const v=DRIVE||ME.car||null;
+function wMe(){const it=ME.it;if(!it)return null;const v=DRIVE||ME.car||(typeof rideCar==='function'?rideCar():null)||null;
   if(v&&v.ph){const ph=v.ph,c=Math.cos(ph.psi),s=Math.sin(ph.psi),vx=ph.u*c-(ph.v||0)*s,vz=-ph.u*s-(ph.v||0)*c;return {x:ph.x,z:ph.z,y:v.y||0,psi:ph.psi,vx,vz,spd:Math.hypot(vx,vz),car:v,ph,foot:false};}
   const P=it.pl;let x=P.x,z=P.z,y=P.y;if(ME.rag&&ME.rag.p){x=ME.rag.p[0].x;z=ME.rag.p[0].z;}
   const sp=PED.u||0;return {x,z,y,psi:P.psi,vx:Math.cos(P.psi)*sp,vz:-Math.sin(P.psi)*sp,spd:Math.abs(sp),car:null,ph:PED,foot:true};}
@@ -20105,7 +20119,7 @@ function wBusted(){if(WANT.busted||ME.dead)return;WANT.busted=true;ME.dead=true;
   const w=g$('gwasted');w.hidden=false;w.classList.add('busted');const b=w.querySelector('b');if(b)b.textContent='Busted';
   g$('gwastedSub').textContent=[lost>0?'You lost '+fmt$(lost)+' in cash':'',guns?'Your weapons were confiscated':''].filter(Boolean).join(' · ');requestAnimationFrame(()=>w.classList.add('on'));
   try{sndWasted();}catch(e){}WANT.bustedScreen=true;wClear('busted');WANT.busted=true;
-  setTimeout(()=>{if(!ME.dead||MODE!=='play')return;RESPAWN=true;if(document.pointerLockElement)document.exitPointerLock();toSpawn();respawnTexts(true);},4600);}
+  setTimeout(()=>{if(!ME.dead||!liveMode())return;RESPAWN=true;if(document.pointerLockElement)document.exitPointerLock();toSpawn();respawnTexts(true);},4600);}
 function wTasedStep(dt){const T=WANT.tased;if(!T)return;T.t+=dt;if(!ME.rag&&T.t>0.6&&!WANT.busted){WANT.surr.on=true;WANT.surr.t=1;}if(T.t>2.4&&!WANT.busted){const A=wArrester();if(!A||Math.hypot(A.x-wMe().x,A.z-wMe().z)<1.6||T.t>9)wBusted();}}
 
 /* ---------------------------------------------------------------- the game's hooks into this */
@@ -20249,7 +20263,7 @@ const W_CSS=`#gwanted{position:absolute;right:calc(18px + env(safe-area-inset-ri
 @media (prefers-reduced-motion:reduce){#gwanted .wst b,#gwanted .wev i{animation:none}#gwanted.flash .wst svg{animation-duration:1.6s}}`;
 
 /* ---------------------------------------------------------------- every frame */
-function wantedStep(dt){if(!ME.it||MODE!=='play')return;WANT.t+=dt;
+function wantedStep(dt){if(!ME.it||!liveMode())return;WANT.t+=dt;
   try{staminaStep(dt);callsStep(dt);trailStep();
     WANT.eyeT-=dt;if(WANT.eyeT<=0){WANT.eyeT=0.25;wEyes();wLOSflush();}
     wState(dt);
@@ -20427,6 +20441,10 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Online: pausing (and the settings and full map from it) no longer stops your game: the world keeps going for everyone, so your police, traffic and people don\'t vanish from the others\' screens',
+    'Online: riding in another player\'s car is solid: you\'re no longer thrown out or knocked over by the car you\'re in, you sit exactly in the seat at any speed, the car camera follows, and a brief network hiccup doesn\'t drop you',
+    'Online: getting out of a moving car you\'re riding in sends you tumbling along the road',
+    'Online: other players\' guns are shown exactly as they hold and aim them (and only once they\'re actually drawn)',
     'Animation overhaul: walking and running plant the feet and roll heel to toe; bodies lean into turns, starts and stops; every change of pose blends smoothly',
     'Carjacking: you lean into the car, grab the driver by the shoulder and shirt, and haul them out with your hands on them while they flinch and grab at your wrist',
     'Guns: a real shooting stance (feet staggered, knees soft), recoil through the shoulders, stepping sideways and back with the gun up; police and armed people too',
@@ -21149,19 +21167,23 @@ function tick(){requestAnimationFrame(tick);if(TESTMODE)return;const now=perform
     if(tv<gap*0.4)top='graphics card / browser';
     const ev=PF.ev&&now-PF.ev.t<3000?' · '+((now-PF.ev.t)/1000).toFixed(1)+' s after '+PF.ev.name:'';
     PF.hit={gap:Math.round(gap),top,tv:Math.round(tv),ev,at:now};console.log('[hitch] '+PF.hit.gap+' ms, longest part: '+top+' '+PF.hit.tv+' ms'+ev,JSON.stringify(prev,(k,v)=>typeof v==='number'?Math.round(v):v));}}
-function step(dt){if(MODE==='play'&&WP.wheel)dt*=0.3;const frozen=(MODE==='photo'&&!PHOTO.run)||MODE==='map';if(MODE!=='pause'&&!frozen&&!(MODE==='settings'&&settingsFrom==='pause'))TR.clock(dt);
+// online, nothing stops for one player's menus: the pause screen, the settings from it and the full map leave the world running
+// (your character stands or your car rolls on with nobody at the controls), since everyone else is still playing in it
+function liveMode(){return MODE==='play'||(NET.on&&!!ME.it&&(MODE==='pause'||MODE==='map'||(MODE==='settings'&&settingsFrom==='pause')));}
+function step(dt){if(MODE==='play'&&WP.wheel&&!NET.on)dt*=0.3;const live=liveMode(),frozen=!live&&((MODE==='photo'&&!PHOTO.run)||MODE==='map');if(live||(MODE!=='pause'&&!frozen&&!(MODE==='settings'&&settingsFrom==='pause')))TR.clock(dt);
   pollPad();
   window.ANIM_T=(window.ANIM_T||0)+dt;   // the clock every body's pose blending runs on
-  if((MODE==='play'||(MODE==='photo'&&PHOTO.run))&&ME.it){ME.t+=dt;
-    if(PADS.on){if(ME.seq&&carCamOn()){if(PADS.rx||PADS.ry){L.camDrag(true);L.camLook(PADS.rx*dt*700,PADS.ry*dt*450);clearTimeout(ME.dragT);ME.dragT=setTimeout(()=>L.camDrag(false),700);}}
+  if((live||(MODE==='photo'&&PHOTO.run))&&ME.it){ME.t+=dt;
+    if(PADS.on&&MODE==='play'){if(ME.seq&&carCamOn()){if(PADS.rx||PADS.ry){L.camDrag(true);L.camLook(PADS.rx*dt*700,PADS.ry*dt*450);clearTimeout(ME.dragT);ME.dragT=setTimeout(()=>L.camDrag(false),700);}}
       else{ME.yaw-=PADS.rx*dt*2.6;ME.pitch=clamp(ME.pitch+PADS.ry*dt*1.8,-0.55,1.25);}}
     let t0=performance.now();
     stepVehicle(dt);for(const v of CARS)if(v.alive)syncVehicle(v,dt);abandonStep(dt);doorWorldStep(dt);parkStep(dt);alarmStep(dt);victimStep(dt);ragStep(dt);pedStep(dt);t0=pfT('your car',t0);wantedStep(dt);t0=pfT('police',t0);TR.calm(dt);t0=pfT('your car',t0);shardsStep(dt);debrisStep(dt);t0=pfT('glass and debris',t0);
     if(ME.car){if(ME.seq)carSeqStep(dt);else seatedStep(dt);}
     else if(ME.rag){const R=ME.rag,P=ME.it.pl;if(R.mode!=='up'){P.x=R.p[0].x;P.z=R.p[0].z;P.y=groundAt(P.x,P.z,R.p[0].y+0.5).y;}}
     else{// on foot: a car coming into you knocks you down
-      const P=ME.it.pl,h=!ME.climb&&!ME.dead&&carHitting(P.x,P.z,P.y,0.3);if(h){ME.punch=null;WANT.surr.on=false;knockDown(h);carHitHurt(h);}else if((WANT.surr.on||WANT.busted)&&!ME.climb){wSurrPose(dt);}else{playStep(dt);playerFightStep(dt);}}t0=pfT('player',t0);
-    shopStep(dt);try{toolStep(dt);}catch(e){console.warn('tools',e);}try{netStep(dt);}catch(e){console.warn('net',e);}wpStep(dt);fxStep(dt);t0=pfT('guns',t0);
+      const P=ME.it.pl,riding=NET.ride&&!NET.ride.seq,h=!riding&&!ME.climb&&!ME.dead&&carHitting(P.x,P.z,P.y,0.3);if(h){ME.punch=null;WANT.surr.on=false;knockDown(h);carHitHurt(h);}else if((WANT.surr.on||WANT.busted)&&!ME.climb){wSurrPose(dt);}else{playStep(dt);playerFightStep(dt);}}t0=pfT('player',t0);
+    shopStep(dt);try{toolStep(dt);}catch(e){console.warn('tools',e);}try{netStep(dt);}catch(e){console.warn('net',e);}if(NET.ride&&!NET.ride.seq)try{netRidePlace();}catch(e){}wpStep(dt);fxStep(dt);t0=pfT('guns',t0);
+    if(NET.on&&!(DRIVE&&!ME.seq)&&!(NET.ride&&!NET.ride.seq))try{NET.pzC=nwPoseOut(ME.it.g);NET.pzT=ME.t;}catch(e){}
     if(!DRIVE&&!ME.car){const P=ME.it.pl;PED.x=P.x;PED.z=P.z;PED.y=P.y;}   // traffic must always know where you really are
     TR.setPlayer(DRIVE?DRIVE.ph:ME.car?ME.car.ph:PED);TR.police.frame(dt);TR.frame(dt);t0=pfT('traffic',t0);trafficDamageStep(dt);trafficPanelsStep(dt);t0=pfT('traffic damage',t0);placeCam(dt);TR.visuals(dt);trafficLampsPost();flatPost(dt);TR.audio();
     if(DRIVE){try{L.audioFrameFor(DRIVE.ph,camera);}catch(e){}}else TR.listen(camera);t0=pfT('traffic visuals and sound',t0);
@@ -21182,7 +21204,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
