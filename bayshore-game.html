@@ -18149,7 +18149,7 @@ function robUI(on){let e=g$('grob');if(!e){e=document.createElement('div');e.id=
 function sndPry(a){if(!sndOK())return;const t=DAC.currentTime,k=sndAt(new THREE.Vector3(a.x,a.y+1,a.z));
   thump(t,120,60,0.09,0.35*k);burst(t,0.05,2200,2,0.18*k);ring(t,900+Math.random()*700,0.18,0.03*k);if(Math.random()<0.4)burst(t+0.05,0.25,3800,6,0.05*k);}
 // the alarm: a fast two-tone bell, heard from a long way off
-function alarmStep(dt){for(let i=ATM_ALARMS.length-1;i>=0;i--){const A=ATM_ALARMS[i];A.t+=dt;if(A.t>A.T){ATM_ALARMS.splice(i,1);continue;}
+function atmAlarmStep(dt){for(let i=ATM_ALARMS.length-1;i>=0;i--){const A=ATM_ALARMS[i];A.t+=dt;if(A.t>A.T){ATM_ALARMS.splice(i,1);continue;}
     A.next-=dt;if(A.next>0)continue;A.next=0.11;if(!sndOK())continue;const d=camera.position.distanceTo(new THREE.Vector3(A.x,A.y,A.z)),k=Math.min(1,14/Math.max(3,d));if(k<0.02)continue;
     const t=DAC.currentTime,f=(Math.floor(A.t/0.11)%2)?1180:1420;ring(t,f,0.1,0.07*k);ring(t,f*2.02,0.07,0.015*k);}
   // a broken ATM is fixed after a while, once nobody is looking
@@ -20441,6 +20441,7 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Car alarms go off again when you break into a parked car (and ATM alarms still ring)',
     'Online: pausing (and the settings and full map from it) no longer stops your game: the world keeps going for everyone, so your police, traffic and people don\'t vanish from the others\' screens',
     'Online: riding in another player\'s car is solid: you\'re no longer thrown out or knocked over by the car you\'re in, you sit exactly in the seat at any speed, the car camera follows, and a brief network hiccup doesn\'t drop you',
     'Online: getting out of a moving car you\'re riding in sends you tumbling along the road',
@@ -21177,7 +21178,7 @@ function step(dt){if(MODE==='play'&&WP.wheel&&!NET.on)dt*=0.3;const live=liveMod
     if(PADS.on&&MODE==='play'){if(ME.seq&&carCamOn()){if(PADS.rx||PADS.ry){L.camDrag(true);L.camLook(PADS.rx*dt*700,PADS.ry*dt*450);clearTimeout(ME.dragT);ME.dragT=setTimeout(()=>L.camDrag(false),700);}}
       else{ME.yaw-=PADS.rx*dt*2.6;ME.pitch=clamp(ME.pitch+PADS.ry*dt*1.8,-0.55,1.25);}}
     let t0=performance.now();
-    stepVehicle(dt);for(const v of CARS)if(v.alive)syncVehicle(v,dt);abandonStep(dt);doorWorldStep(dt);parkStep(dt);alarmStep(dt);victimStep(dt);ragStep(dt);pedStep(dt);t0=pfT('your car',t0);wantedStep(dt);t0=pfT('police',t0);TR.calm(dt);t0=pfT('your car',t0);shardsStep(dt);debrisStep(dt);t0=pfT('glass and debris',t0);
+    stepVehicle(dt);for(const v of CARS)if(v.alive)syncVehicle(v,dt);abandonStep(dt);doorWorldStep(dt);parkStep(dt);alarmStep(dt);atmAlarmStep(dt);victimStep(dt);ragStep(dt);pedStep(dt);t0=pfT('your car',t0);wantedStep(dt);t0=pfT('police',t0);TR.calm(dt);t0=pfT('your car',t0);shardsStep(dt);debrisStep(dt);t0=pfT('glass and debris',t0);
     if(ME.car){if(ME.seq)carSeqStep(dt);else seatedStep(dt);}
     else if(ME.rag){const R=ME.rag,P=ME.it.pl;if(R.mode!=='up'){P.x=R.p[0].x;P.z=R.p[0].z;P.y=groundAt(P.x,P.z,R.p[0].y+0.5).y;}}
     else{// on foot: a car coming into you knocks you down
@@ -21204,7 +21205,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
