@@ -12837,6 +12837,22 @@ function riseBlend(sp,w,sg){if(w<=0)return sp;const mid=PZ(),hy=0.74,a0=gLeg(0.2
    Coordinates in metres: +x east, +z south, y up.
 =========================================================================== */
 const TH = THREE;
+{ const SC = THREE.ShaderChunk;
+  SC.fog_pars_vertex = SC.fog_pars_vertex.replace('#ifdef USE_FOG', '#ifdef USE_FOG\n\tvarying vec3 vFogV;');
+  SC.fog_vertex = SC.fog_vertex.replace('#ifdef USE_FOG', '#ifdef USE_FOG\n\tvFogV = mvPosition.xyz;');
+  SC.fog_pars_fragment = SC.fog_pars_fragment.replace('#ifdef USE_FOG', '#ifdef USE_FOG\n\tvarying vec3 vFogV;');
+  SC.fog_fragment = `#ifdef USE_FOG
+	float fogD = length( vFogV );
+	#ifdef FOG_EXP2
+		float fogDy = ( vFogV * mat3( viewMatrix ) ).y, fogKd = 0.016 * fogDy;
+		float fogHf = exp( -0.016 * max( cameraPosition.y - 2.0, 0.0 ) ) * ( abs( fogKd ) > 1e-3 ? ( 1.0 - exp( -fogKd ) ) / fogKd : 1.0 - 0.5 * fogKd );
+		float fogOd = fogDensity * fogD * ( 0.42 + 0.58 * clamp( fogHf, 0.0, 3.0 ) );
+		float fogFactor = 1.0 - exp( - fogOd * fogOd );
+	#else
+		float fogFactor = smoothstep( fogNear, fogFar, fogDepth );
+	#endif
+	gl_FragColor.rgb = mix( gl_FragColor.rgb, fogColor, fogFactor );
+#endif`; }
 const WD = JSON.parse(document.getElementById('worlddata').textContent);
 if (window.BAY_WD_EDIT) window.BAY_WD_EDIT(WD);   // the game adds its own places (the police station) before the city is built
 const clamp = (v, a, b) => v < a ? a : v > b ? b : v, lerp = (a, b, t) => a + (b - a) * t, smooth = t => t * t * (3 - 2 * t);
@@ -12986,7 +13002,7 @@ function initRenderer() {
 function resize() { const w = stage.clientWidth || innerWidth, h = stage.clientHeight || innerHeight; renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix(); }
 const SUNDIR = new TH.Vector3();
 const TOD = {
-  day: { elev: 52, az: 140, exp: 0.5, sun: 1.7, sunCol: 0xfff1dc, hemi: 0.28, fog: 0xbfd2e2, fogD: 0.00026, lamps: 0, win: 0, skyTop: 0x3f7cc4, skyHor: 0xc8dbe8 },
+  day: { elev: 44, az: 140, exp: 0.5, sun: 1.85, sunCol: 0xfff0d8, hemi: 0.26, fog: 0xbfd2e2, fogD: 0.0003, lamps: 0, win: 0, skyTop: 0x3f7cc4, skyHor: 0xc8dbe8 },
   sunset: { elev: 3.5, az: 255, exp: 0.62, sun: 1.3, sunCol: 0xffb070, hemi: 0.2, fog: 0xd7a382, fogD: 0.0003, lamps: 0.7, win: 0.6, skyTop: 0x34467a, skyHor: 0xeca070 },
   night: { elev: -12, az: 255, exp: 0.9, sun: 0.12, sunCol: 0x9fb4e6, hemi: 0.1, fog: 0x0b1222, fogD: 0.0003, lamps: 1, win: 1, skyTop: 0x03060f, skyHor: 0x16203a },
   sunrise: { elev: 4, az: 95, exp: 0.62, sun: 1.3, sunCol: 0xffc08a, hemi: 0.22, fog: 0xe0bba0, fogD: 0.0003, lamps: 0.55, win: 0.4, skyTop: 0x51689c, skyHor: 0xf0c08e },
@@ -13105,65 +13121,445 @@ function makeMats() {
    0 grass 1 sand 2 forest floor 3 crop 4 plowed 5 stubble 6 paving 7 asphalt 8 meadow 9 rock
 --------------------------------------------------------------------------- */
 let TERRAIN = [];
-function buildTerrain() {
-  const step = 6, nx = Math.floor(WD.size[0] / step), nz = Math.floor(WD.size[1] / step), CN = 40;
+/* ===========================================================================
+   TERRAIN v2: geology, geometry and surface.
+
+   1. terrSculpt(): the height field from the map is resampled to 2 m and given a believable shape where the land is
+      natural (grass, meadow, woods, fields): large eroded landforms (ridges and the valleys between them, hilly country
+      and flat), medium hills and hollows, rock escarpments, small gullies, and fine relief down to a couple of metres.
+      All of it fades out toward anything built (streets, lots, buildings, piers, props) and toward the water's edge, so
+      the city and everything placed in it stay exactly where they were. Everything reads heightAt(), so driving,
+      walking, trees and the water all follow the new ground.
+   2. terrTex(): the ground materials, generated as tileable 1024 px textures with a height channel (grass, soil and
+      pebbles, rock, sand, forest litter, gravel).
+   3. The data the shader needs: a 2 m world normal map with horizon-based ambient occlusion in its alpha (so lighting
+      never depends on the mesh's level of detail), and a 4 m field of distance to built things, moisture, wildness and
+      distance to water.
+   4. buildTerrain(): chunks with three levels of detail (2, 4, 8 m) and skirts, refined near the camera as it moves.
+   5. The terrain material: height-based blending between materials, slope rock projected on three axes, detail normals
+      from the blended surface height, per-material roughness and wetness, ambient occlusion and cavities, and colour
+      that varies with moisture, height, slope and dryness.
+=========================================================================== */
+const TERR = { chunks: [], CHS: 128, ready: false, q: 2, mat: null, data: null, nrm: null, built: 0, ms: 0 };
+// ---------------------------------------------------------------- noise
+const _ih = (x, y, s) => { let h = (Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 982451653)) | 0; h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16; return (h >>> 0) / 4294967295; };
+const _q5 = t => t * t * t * (t * (t * 6 - 15) + 10), _dq5 = t => 30 * t * t * (t * (t - 2) + 1);
+// value noise in [-1,1] with its derivatives (out[0], out[1])
+function vnd(x, y, s, out) { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = _q5(fx), uy = _q5(fy);
+  const a = _ih(ix, iy, s) * 2 - 1, b = _ih(ix + 1, iy, s) * 2 - 1, c = _ih(ix, iy + 1, s) * 2 - 1, d = _ih(ix + 1, iy + 1, s) * 2 - 1, k1 = b - a, k2 = c - a, k4 = a - b - c + d;
+  if (out) { out[0] = _dq5(fx) * (k1 + k4 * uy); out[1] = _dq5(fy) * (k2 + k4 * ux); } return a + k1 * ux + k2 * uy + k4 * ux * uy; }
+const _nd = [0, 0];
+function fbm(x, y, oct, s) { let a = 0, b = 0.5, f = 1, n = 0; for (let i = 0; i < oct; i++) { a += b * vnd(x * f + i * 17.3, y * f - i * 9.1, s + i); n += b; b *= 0.5; f *= 2.03; } return a / n; }
+// eroded fbm: each octave damped by the slope built up so far, so slopes stay clean and detail gathers on flats and crests
+function efbm(x, y, oct, s) { let a = 0, b = 0.5, dx = 0, dy = 0, px = x, py = y, n = 0;
+  for (let i = 0; i < oct; i++) { const v = vnd(px, py, s + i, _nd); dx += _nd[0]; dy += _nd[1]; a += b * v / (1 + dx * dx + dy * dy); n += b; b *= 0.5;
+    const qx = 0.8 * px - 0.6 * py, qy = 0.6 * px + 0.8 * py; px = qx * 2.01 + 3.1; py = qy * 2.01 - 1.7; }
+  return a / n; }
+function ridged(x, y, oct, s) { let a = 0, b = 0.5, f = 1, n = 0; for (let i = 0; i < oct; i++) { const v = 1 - Math.abs(vnd(x * f, y * f, s + i)); a += b * v * v; n += b; b *= 0.5; f *= 2.1; } return a / n; }
+const ss = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+
+/* ---------------------------------------------------------------- 1. the shape of the land */
+function terrSculpt() {
+  const t0 = performance.now(), R4 = HRES, W4 = HW, H4 = HH, N4 = W4 * H4, H0 = HGT;
+  // ---- what's built, on the 4 m grid (cell centres at origin + (i+0.5)*R4)
+  const prot = new Uint8Array(N4);
+  const cell = (x, z) => [Math.floor((x - OX) / R4), Math.floor((z - OZ) / R4)];
+  const mark = (i, j) => { if (i >= 0 && j >= 0 && i < W4 && j < H4) prot[j * W4 + i] = 1; };
+  const fillPoly = P => { if (!P || P.length < 3) return; let z0 = 1e9, z1 = -1e9; for (const p of P) { z0 = Math.min(z0, p[1]); z1 = Math.max(z1, p[1]); }
+    const j0 = Math.max(0, Math.floor((z0 - OZ) / R4 - 0.5)), j1 = Math.min(H4 - 1, Math.ceil((z1 - OZ) / R4 - 0.5));
+    for (let j = j0; j <= j1; j++) { const z = OZ + (j + 0.5) * R4, xs = [];
+      for (let k = 0; k < P.length; k++) { const a = P[k], b = P[(k + 1) % P.length]; if ((a[1] <= z) !== (b[1] <= z)) xs.push(a[0] + (z - a[1]) / (b[1] - a[1]) * (b[0] - a[0])); }
+      xs.sort((a, b) => a - b); for (let k = 0; k + 1 < xs.length; k += 2) { const i0 = Math.max(0, Math.ceil((xs[k] - OX) / R4 - 0.5)), i1 = Math.min(W4 - 1, Math.floor((xs[k + 1] - OX) / R4 - 0.5)); for (let i = i0; i <= i1; i++) prot[j * W4 + i] = 1; } }
+    for (const p of P) { const [i, j] = cell(p[0], p[1]); mark(i, j); } };
+  const disc = (x, z, r) => { if (!(isFinite(x) && isFinite(z))) return; const n = Math.ceil(r / R4); const [ci, cj] = cell(x, z);
+    for (let j = cj - n; j <= cj + n; j++) for (let i = ci - n; i <= ci + n; i++) { const dx = OX + (i + 0.5) * R4 - x, dz = OZ + (j + 0.5) * R4 - z; if (dx * dx + dz * dz <= r * r + R4 * R4) mark(i, j); } };
+  const line = (P, r) => { for (let k = 0; k + 1 < P.length; k++) { const a = P[k], b = P[k + 1], L = Math.hypot(b[0] - a[0], b[1] - a[1]), n = Math.max(1, Math.ceil(L / (R4 * 0.7)));
+      for (let s = 0; s <= n; s++) disc(a[0] + (b[0] - a[0]) * s / n, a[1] + (b[1] - a[1]) * s / n, r); } };
+  const polysOf = o => { if (!o) return []; if (Array.isArray(o)) return o.map(e => e && (e.o || e.poly || e)).filter(Array.isArray); return [o.o || o.poly].filter(Array.isArray); };
+  try {
+    (WD.roads || []).forEach(r => line(r.pts, (r.width || 8) / 2 + 2.5));
+    const S = WD.surf || {}; ['road', 'walk', 'island'].forEach(k => polysOf(S[k]).forEach(fillPoly));
+    polysOf(WD.lots).forEach(fillPoly); polysOf(WD.lotcurb).forEach(fillPoly); polysOf(WD.decks).forEach(fillPoly);
+    if (WD.apron) { fillPoly(WD.apron.o); (WD.apron.polys || []).forEach(p => fillPoly(p.o || p)); }
+    (WD.buildings || []).forEach(b => (b.t || []).forEach(t => fillPoly(t.poly)));
+    (WD.props || []).forEach(p => disc(p[1], p[3], 6));
+    (WD.lights || []).forEach(p => disc(p[0], p[1], 3));
+    (WD.stopsigns || []).forEach(p => disc(p[0], p[1], 3));
+    (WD.signals || []).forEach(p => { if (Array.isArray(p)) disc(p[0], p[1], 4); else if (p) disc(p.x, p.z, 4); });
+    (WD.fountains || []).forEach(p => disc(p[0], p[1], 14));
+    (WD.pools || []).forEach(p => disc(p[0], p[1], Math.hypot(p[2] || 10, p[3] || 10) / 2 + 4));
+    (WD.parking || []).forEach(p => disc(p[0], p[1], 30));
+    (WD.piers || []).forEach(p => disc(p[0], p[1], Math.max(10, (p[4] || 0) + (p[5] || 0))));
+    (WD.mast || []).forEach(p => disc(p[0], p[1], 10));
+    (WD.cranes || []).forEach(c => disc(c.x, c.z, 45));
+    (WD.rails || []).forEach(L => line(L, 3));
+    (WD.nodes || []).forEach(n => { if (n && isFinite(n.x)) disc(n.x, n.z, 22); else if (Array.isArray(n)) disc(n[0], n[1], 22); });
+  } catch (e) { console.warn('terrain: protection', e); }
+  // ---- distances (metres) to built things and to water: chamfer transform
+  const dist = src => { const D = new Float32Array(N4), INF = 1e9, a = R4, b = R4 * Math.SQRT2;
+    for (let k = 0; k < N4; k++) D[k] = src(k) ? 0 : INF;
+    for (let j = 0; j < H4; j++) for (let i = 0; i < W4; i++) { const k = j * W4 + i; let v = D[k]; if (!v) continue;
+      if (i > 0) v = Math.min(v, D[k - 1] + a); if (j > 0) { v = Math.min(v, D[k - W4] + a); if (i > 0) v = Math.min(v, D[k - W4 - 1] + b); if (i < W4 - 1) v = Math.min(v, D[k - W4 + 1] + b); } D[k] = v; }
+    for (let j = H4 - 1; j >= 0; j--) for (let i = W4 - 1; i >= 0; i--) { const k = j * W4 + i; let v = D[k]; if (!v) continue;
+      if (i < W4 - 1) v = Math.min(v, D[k + 1] + a); if (j < H4 - 1) { v = Math.min(v, D[k + W4] + a); if (i < W4 - 1) v = Math.min(v, D[k + W4 + 1] + b); if (i > 0) v = Math.min(v, D[k + W4 - 1] + b); } D[k] = v; }
+    return D; };
+  const dP = dist(k => prot[k]), dW = dist(k => H0[k] < WATER_Y + 0.5);
+  // ---- how natural the ground is (from the 2 m material map), blurred so the shape doesn't step at field edges
+  let nat = new Float32Array(N4);
+  { const NW = [1, 0.25, 0.95, 0.15, 0.15, 0.15, 0, 0, 1, 1];
+    for (let j = 0; j < H4; j++) for (let i = 0; i < W4; i++) { let s = 0, n = 0; for (let b = 0; b < 2; b++) for (let a = 0; a < 2; a++) { const mi = i * 2 + a, mj = j * 2 + b; if (mi < MW && mj < MH) { s += NW[MATPIX[mj * MW + mi]] || 0; n++; } } nat[j * W4 + i] = n ? s / n : 0; }
+    const blur = (A, r) => { const T = new Float32Array(N4); for (let j = 0; j < H4; j++) { let acc = 0; for (let i = -r; i <= r; i++) acc += A[j * W4 + clamp(i, 0, W4 - 1)];
+        for (let i = 0; i < W4; i++) { T[j * W4 + i] = acc / (2 * r + 1); acc += A[j * W4 + Math.min(W4 - 1, i + r + 1)] - A[j * W4 + Math.max(0, i - r)]; } }
+      for (let i = 0; i < W4; i++) { let acc = 0; for (let j = -r; j <= r; j++) acc += T[clamp(j, 0, H4 - 1) * W4 + i];
+        for (let j = 0; j < H4; j++) { A[j * W4 + i] = acc / (2 * r + 1); acc += T[Math.min(H4 - 1, j + r + 1) * W4 + i] - T[Math.max(0, j - r) * W4 + i]; } } };
+    blur(nat, 3); blur(nat, 3); }
+  // ---- the landforms, on the 4 m grid
+  const H1 = new Float32Array(N4), mS4 = new Float32Array(N4), wild = new Float32Array(N4);
+  for (let j = 0; j < H4; j++) for (let i = 0; i < W4; i++) {
+    const k = j * W4 + i, h0 = H0[k]; H1[k] = h0;
+    if (h0 < WATER_Y + 0.4) continue;
+    const x = OX + (i + 0.5) * R4, z = OZ + (j + 0.5) * R4, n = nat[k], p = dP[k], w = dW[k];
+    const mL = n * ss(14, 110, p) * ss(8, 80, w), mM = n * ss(7, 42, p) * ss(5, 40, w);
+    mS4[k] = ss(2.5, 12, p) * ss(2, 10, w) * (0.35 + 0.65 * n);
+    if (mL <= 0 && mM <= 0) continue;
+    let D = 0;
+    if (mL > 0) {
+      // where the country is hilly and where it's flat
+      const reg = 0.42 + 0.58 * ss(-0.25, 0.45, fbm(x / 1700, z / 1700, 2, 71));
+      // warped, eroded landforms with ridgelines
+      const wx = x + 160 * fbm(x / 640, z / 640, 3, 81), wz = z + 160 * fbm(x / 640 + 5.2, z / 640 - 3.1, 3, 91);
+      const e = efbm(wx / 560, wz / 560, 6, 101), r = ridged(wx / 300, wz / 300, 4, 121);
+      let L = 17 * reg * (0.5 + 0.5 * e) + 11 * reg * r * ss(-0.2, 0.5, e);
+      // escarpments: a step in the land where it rises, a rock face a few metres high
+      const c = fbm(wx / 380, wz / 380, 3, 141), sel = ss(0.05, 0.3, fbm(x / 900, z / 900, 2, 151));
+      // a sharp face where the selector allows it, a broad shoulder elsewhere
+      const step = lerp(ss(0.1, 0.22, c), ss(0.15, 0.162, c), sel) + 0.45 * lerp(ss(0.34, 0.46, c), ss(0.39, 0.4, c), sel);
+      L += (6 + 4 * sel) * reg * step * ss(0.55, 0.9, n);
+      D += L * mL; wild[k] = reg * mL;
+    }
+    if (mM > 0) {
+      const M = 3.4 * fbm(x / 140, z / 140, 4, 161) + 1.2 * fbm(x / 52, z / 52, 3, 181);
+      // gullies cut by water: narrow, branching, where the ground falls
+      const gq = 1 - Math.abs(fbm(x / 170 + 1.6 * fbm(x / 260, z / 260, 2, 191), z / 170, 2, 201)), gully = Math.pow(gq, 3.2) * 2.4 * ss(0.2, 0.8, mM);
+      D += (M - gully) * mM;
+    }
+    H1[k] = h0 > WATER_Y + 0.4 ? Math.max(h0 + D, WATER_Y + 0.45) : h0 + D;
+  }
+  // ---- resample to 2 m (Catmull-Rom) and add the fine relief
+  const W2 = W4 * 2, H2 = H4 * 2, R2 = R4 / 2, HG2 = new Float32Array(W2 * H2);
+  const at4 = (i, j) => H1[clamp(j, 0, H4 - 1) * W4 + clamp(i, 0, W4 - 1)];
+  const cr = (p0, p1, p2, p3, t) => p1 + 0.5 * t * (p2 - p0 + t * (2 * p0 - 5 * p1 + 4 * p2 - p3 + t * (3 * (p1 - p2) + p3 - p0)));
+  const ms4 = (fx, fz) => { const i = clamp(Math.floor(fx), 0, W4 - 2), j = clamp(Math.floor(fz), 0, H4 - 2), tx = clamp(fx - i, 0, 1), tz = clamp(fz - j, 0, 1);
+    return lerp(lerp(mS4[j * W4 + i], mS4[j * W4 + i + 1], tx), lerp(mS4[(j + 1) * W4 + i], mS4[(j + 1) * W4 + i + 1], tx), tz); };
+  for (let j = 0; j < H2; j++) { const z = OZ + (j + 0.5) * R2, fz = (z - OZ) / R4 - 0.5, j0 = Math.floor(fz), tz = fz - j0;
+    for (let i = 0; i < W2; i++) { const x = OX + (i + 0.5) * R2, fx = (x - OX) / R4 - 0.5, i0 = Math.floor(fx), tx = fx - i0;
+      const r = []; for (let b = -1; b <= 2; b++) r.push(cr(at4(i0 - 1, j0 + b), at4(i0, j0 + b), at4(i0 + 1, j0 + b), at4(i0 + 2, j0 + b), tx));
+      let h = cr(r[0], r[1], r[2], r[3], tz);
+      // keep built ground exactly as it was (no overshoot from the curve)
+      const m = ms4(fx, fz);
+      if (m < 0.02) { const ii = clamp(i0, 0, W4 - 2), jj = clamp(j0, 0, H4 - 2), ttx = clamp(tx, 0, 1), ttz = clamp(tz, 0, 1);
+        h = lerp(lerp(H1[jj * W4 + ii], H1[jj * W4 + ii + 1], ttx), lerp(H1[(jj + 1) * W4 + ii], H1[(jj + 1) * W4 + ii + 1], ttx), ttz); }
+      else if (h > WATER_Y + 0.3) {
+        // steep ground is rock: bedding ledges (the face steps back in layers) and a blocky, broken surface
+        const sx = (at4(i0 + 1, j0) - at4(i0 - 1, j0)) / (2 * R4), sz = (at4(i0, j0 + 1) - at4(i0, j0 - 1)) / (2 * R4), sl = Math.hypot(sx, sz), rk = ss(0.25, 0.7, sl) * m;
+        if (rk > 0) { const lh = 1.5 + 0.5 * vnd(x / 60, z / 60, 261), tq = (h + 0.6 * vnd(x / 25, z / 25, 263)) / lh, tf = tq - Math.floor(tq), led = (Math.floor(tq) + ss(0.35, 0.65, tf)) * lh;
+          h = lerp(h, led, 0.9 * rk) + rk * (1.3 * Math.abs(vnd(x / 5.5, z / 5.5, 271)) + 0.55 * vnd(x / 2.6, z / 2.6, 281) - 0.45); }
+        h += m * (0.42 * fbm(x / 17, z / 17, 3, 221) + 0.13 * vnd(x / 4.5, z / 4.5, 241) + 0.05 * vnd(x / 2.2, z / 2.2, 251)); h = Math.max(h, WATER_Y + 0.4); }
+      HG2[j * W2 + i] = h; } }
+  // ---- what the shader needs: distance to built things, moisture, wildness, distance to water (4 m), normals and AO (2 m)
+  const D4 = new Uint8Array(N4 * 4);
+  { const bl = new Float32Array(N4); // the ground averaged over ~40 m: below it is a hollow (wetter), above it a rise (drier)
+    const r = 5; for (let j = 0; j < H4; j++) for (let i = 0; i < W4; i++) { let s = 0, n = 0; for (let b = -r; b <= r; b += 2) for (let a = -r; a <= r; a += 2) { const ii = i + a, jj = j + b; if (ii >= 0 && jj >= 0 && ii < W4 && jj < H4) { s += H1[jj * W4 + ii]; n++; } } bl[j * W4 + i] = s / n; }
+    for (let k = 0; k < N4; k++) { const moist = clamp(0.55 * ss(45, 0, dW[k]) + (bl[k] - H1[k]) * 0.35 + 0.2 * (1 - ss(0.5, 7, H1[k])), 0, 1);
+      D4[k * 4] = clamp(dP[k] / 40 * 255, 0, 255); D4[k * 4 + 1] = moist * 255; D4[k * 4 + 2] = clamp(wild[k] * 255, 0, 255); D4[k * 4 + 3] = clamp(dW[k] / 60 * 255, 0, 255); } }
+  // horizon-based occlusion on the 4 m grid: how much of the sky the hills around hide
+  const AO4 = new Float32Array(N4).fill(1);
+  { const dirs = []; for (let a = 0; a < 8; a++) dirs.push([Math.cos(a * Math.PI / 4), Math.sin(a * Math.PI / 4)]);
+    const rad = [1, 2, 4, 7, 12];
+    for (let j = 0; j < H4; j++) for (let i = 0; i < W4; i++) { const k = j * W4 + i, h = H1[k]; if (h < WATER_Y - 3) continue; let occ = 0;
+      for (const [dx, dz] of dirs) { let mx = 0; for (const r of rad) { const ii = Math.round(i + dx * r), jj = Math.round(j + dz * r); if (ii < 0 || jj < 0 || ii >= W4 || jj >= H4) continue; const s = (H1[jj * W4 + ii] - h) / (r * R4); if (s > mx) mx = s; } occ += mx / Math.sqrt(1 + mx * mx); }
+      AO4[k] = clamp(1 - occ / 8 * 1.15, 0.3, 1); } }
+  const NR = new Uint8Array(W2 * H2 * 4);
+  { const g = (i, j) => HG2[clamp(j, 0, H2 - 1) * W2 + clamp(i, 0, W2 - 1)];
+    for (let j = 0; j < H2; j++) for (let i = 0; i < W2; i++) { const nx = -(g(i + 1, j) - g(i - 1, j)) / (2 * R2), nz = -(g(i, j + 1) - g(i, j - 1)) / (2 * R2), l = Math.hypot(nx, 1, nz), k = (j * W2 + i) * 4;
+      NR[k] = (nx / l * 0.5 + 0.5) * 255; NR[k + 1] = (1 / l * 0.5 + 0.5) * 255; NR[k + 2] = (nz / l * 0.5 + 0.5) * 255;
+      // occlusion: the 4 m horizon term, plus the small hollows of the fine relief
+      const fx = i / 2 - 0.25, fz = j / 2 - 0.25, ii = clamp(Math.floor(fx), 0, W4 - 2), jj = clamp(Math.floor(fz), 0, H4 - 2), tx = clamp(fx - ii, 0, 1), tz = clamp(fz - jj, 0, 1);
+      let ao = lerp(lerp(AO4[jj * W4 + ii], AO4[jj * W4 + ii + 1], tx), lerp(AO4[(jj + 1) * W4 + ii], AO4[(jj + 1) * W4 + ii + 1], tx), tz);
+      const lap = (g(i + 1, j) + g(i - 1, j) + g(i, j + 1) + g(i, j - 1)) / 4 - g(i, j); ao *= clamp(1 - Math.max(0, lap) * 2.2, 0.7, 1);
+      NR[k + 3] = clamp(ao, 0, 1) * 255; } }
+  // the new ground
+  HGT = HG2; HW = W2; HH = H2; HRES = R2;
+  const mk = (arr, w, h) => { const t = new TH.DataTexture(arr, w, h, TH.RGBAFormat, TH.UnsignedByteType); t.magFilter = TH.LinearFilter; t.minFilter = TH.LinearFilter; t.flipY = false; t.wrapS = t.wrapT = TH.ClampToEdgeWrapping; t.needsUpdate = true; return t; };
+  TERR.data = mk(D4, W4, H4); TERR.nrm = mk(NR, W2, H2);
+  TERR.sculptMs = performance.now() - t0;
+}
+
+/* ---------------------------------------------------------------- 2. ground materials */
+function terrTex() {
+  const t0 = performance.now(), S = 1024, aniso = (renderer && renderer.capabilities.getMaxAnisotropy) ? Math.min(16, renderer.capabilities.getMaxAnisotropy()) : 8;
+  // tileable noises (period in cells)
+  const pv = (x, y, P, s) => { const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy, ux = _q5(fx), uy = _q5(fy), m = v => ((v % P) + P) % P;
+    const a = _ih(m(ix), m(iy), s), b = _ih(m(ix + 1), m(iy), s), c = _ih(m(ix), m(iy + 1), s), d = _ih(m(ix + 1), m(iy + 1), s); return a + (b - a) * ux + (c - a) * uy + (a - b - c + d) * ux * uy; };
+  const pf = (u, v, P, oct, s, g) => { let a = 0, b = 0.5, n = 0, p = P; for (let i = 0; i < oct; i++) { a += b * pv(u * p, v * p, p, s + i * 13); n += b; b *= g || 0.5; p *= 2; } return a / n; };   // u,v in 0..1
+  const wor = (u, v, C, s, o) => { const x = u * C, y = v * C, ix = Math.floor(x), iy = Math.floor(y); let f1 = 9, f2 = 9, id = 0;
+    for (let b = -1; b <= 1; b++) for (let a = -1; a <= 1; a++) { const cx = ix + a, cy = iy + b, mx = ((cx % C) + C) % C, my = ((cy % C) + C) % C, px = cx + _ih(mx, my, s), py = cy + _ih(mx, my, s + 7), d = Math.hypot(px - x, py - y);
+      if (d < f1) { f2 = f1; f1 = d; id = _ih(mx, my, s + 3); } else if (d < f2) f2 = d; }
+    o[0] = f1; o[1] = f2; o[2] = id; return o; };
+  const W3 = [0, 0, 0];
+  const make = (fn) => { const d = new Uint8Array(S * S * 4); fn(d); const t = new TH.DataTexture(d, S, S, TH.RGBAFormat, TH.UnsignedByteType);
+    t.wrapS = t.wrapT = TH.RepeatWrapping; t.magFilter = TH.LinearFilter; t.minFilter = TH.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = aniso; t.needsUpdate = true; return t; };
+  const put = (d, k, r, g, b, h) => { d[k] = clamp(r, 0, 255); d[k + 1] = clamp(g, 0, 255); d[k + 2] = clamp(b, 0, 255); d[k + 3] = clamp(h * 255, 0, 255); };
+  // strokes and shapes drawn on a canvas, colour and height together (wrapping at the edges)
+  const strokes = (bg, hbg, n, draw, seed) => { const c = canvas(S, S), x = c.getContext('2d'), hc = canvas(S, S), hx = hc.getContext('2d'), r = rng(seed);
+    x.drawImage(bg, 0, 0); hx.fillStyle = hbg; hx.fillRect(0, 0, S, S);
+    for (let i = 0; i < n; i++) { const o = draw(r, i / n); if (!o) continue; for (const [dx, dy] of [[0, 0], [S, 0], [-S, 0], [0, S], [0, -S]]) { if (dx || dy) { const nx = o.x + dx, ny = o.y + dy; if (nx < -40 || ny < -40 || nx > S + 40 || ny > S + 40) continue; }
+        o.paint(x, o.x + dx, o.y + dy, o.col); o.paint(hx, o.x + dx, o.y + dy, o.hcol); } }
+    const a = x.getImageData(0, 0, S, S).data, hd = hx.getImageData(0, 0, S, S).data, d = new Uint8Array(S * S * 4);
+    for (let k = 0; k < S * S * 4; k += 4) { d[k] = a[k]; d[k + 1] = a[k + 1]; d[k + 2] = a[k + 2]; d[k + 3] = hd[k]; }
+    const t = new TH.DataTexture(d, S, S, TH.RGBAFormat, TH.UnsignedByteType); t.wrapS = t.wrapT = TH.RepeatWrapping; t.magFilter = TH.LinearFilter; t.minFilter = TH.LinearMipmapLinearFilter; t.generateMipmaps = true; t.anisotropy = aniso; t.needsUpdate = true; return t; };
+  const field = (fn) => { const c = canvas(S, S), x = c.getContext('2d'), id = x.createImageData(S, S); for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const k = (j * S + i) * 4, o = fn(i / S, j / S); id.data[k] = o[0]; id.data[k + 1] = o[1]; id.data[k + 2] = o[2]; id.data[k + 3] = 255; } x.putImageData(id, 0, 0); return c; };
+  const T = {};
+  // ---- grass: soil showing between blades, blades of many greens and straw, in clumps
+  { const soil = field((u, v) => { const n = pf(u, v, 8, 5, 301), m = pf(u, v, 3, 3, 311); return [58 + n * 40 + m * 10, 48 + n * 30, 30 + n * 18]; });
+    const pal = [[66, 84, 34], [84, 100, 42], [98, 112, 50], [74, 94, 38], [112, 118, 60], [128, 124, 70], [60, 76, 32], [140, 132, 84], [92, 104, 46]];
+    T.grass = strokes(soil, '#000', 62000, (r, t) => { const x = r() * S, y = r() * S, dens = pf(x / S, y / S, 6, 3, 331); if (r() > 0.25 + dens * 1.1) return null;
+      const L = 7 + r() * 16, a = r() * Math.PI * 2, w = 1 + r() * 1.6, col = pal[(r() * pal.length) | 0], li = 0.6 + t * 0.55 + (r() - 0.5) * 0.15, hv = clamp(40 + t * 215, 0, 255) | 0;
+      const ex = Math.cos(a) * L, ey = Math.sin(a) * L, bend = (r() - 0.5) * L * 0.5;
+      return { x, y, col: 'rgb(' + (col[0] * li | 0) + ',' + (col[1] * li | 0) + ',' + (col[2] * li | 0) + ')', hcol: 'rgb(' + hv + ',' + hv + ',' + hv + ')',
+        paint: (c, px, py, cl) => { c.strokeStyle = cl; c.lineWidth = w; c.lineCap = 'round'; c.beginPath(); c.moveTo(px, py); c.quadraticCurveTo(px + ex * 0.5 - ey * bend / L, py + ey * 0.5 + ex * bend / L, px + ex, py + ey); c.stroke(); } }; }, 351); }
+  // ---- soil: clods and crumbs at several sizes, grit, and scattered stones of different sizes and colours
+  T.dirt = make(d => { for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const u = i / S, v = j / S, k = (j * S + i) * 4;
+      const n = pf(u, v, 5, 6, 401, 0.55), c = pf(u, v, 40, 3, 402), g = _ih(i, j, 403), m = pf(u, v, 2, 3, 405);
+      let r = 84 + n * 44 + m * 12 + (c - 0.5) * 26 + (g - 0.5) * 16, gg = 73 + n * 38 + m * 9 + (c - 0.5) * 22 + (g - 0.5) * 14, b = 61 + n * 30 + m * 6 + (c - 0.5) * 17 + (g - 0.5) * 11;
+      let h = 0.3 + n * 0.3 + (c - 0.5) * 0.25 + g * 0.06;
+      for (const [C, sd, fr] of [[34, 407, 0.4], [80, 408, 0.3]]) { wor(u, v, C, sd, W3); const id = W3[2], rad = 0.16 + 0.22 * _ih((id * 9973) | 0, 2, sd); if (id < 1 - fr || W3[0] > rad) continue;
+        const q = W3[0] / rad, dome = Math.sqrt(Math.max(0, 1 - q * q)), tone = 0.7 + 0.6 * _ih((id * 7919) | 0, 5, sd), warm = (_ih((id * 4447) | 0, 6, sd) - 0.5) * 30, sh = 0.62 + 0.38 * dome;
+        r = (118 * tone + warm) * sh; gg = (110 * tone) * sh; b = (98 * tone - warm * 0.5) * sh; h = 0.62 + dome * 0.38; }
+      put(d, k, r, gg, b, h); } });
+  // ---- rock: weathered limestone: mottled, grainy stone, faint bedding, a few fractures, staining and lichen
+  T.rock = make(d => { for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const u = i / S, v = j / S, k = (j * S + i) * 4;
+      const w1 = pf(u, v, 2, 4, 501), w2 = pf(u + 0.3, v, 3, 4, 502), n = pf(u + w1 * 0.2, v + w2 * 0.08, 4, 7, 503, 0.6), mot = pf(u, v, 12, 5, 521, 0.55), big = pf(u, v, 2, 3, 525);
+      const bedv = v * 7 + w1 * 1.2 + n * 0.3, bedTone = _ih(Math.floor(bedv) & 1023, 3, 504), seam = ss(0.035, 0.0, bedv - Math.floor(bedv)) * (_ih(Math.floor(bedv) & 1023, 9, 506) > 0.6 ? 1 : 0);
+      const frac = 0; wor(u, v, 90, 505, W3); const gr = W3[0], ge = ss(0.08, 0.0, W3[1] - W3[0]), gtone = W3[2]; const streak = pf(u * 0.5, v * 0.06, 16, 4, 509);
+      const g = _ih(i, j, 515), crys = g > 0.992 ? 0.8 : g < 0.006 ? 1.25 : 1;
+      const lich = ss(0.64, 0.74, pf(u, v, 6, 5, 511)) * 0.8, lw = ss(0.68, 0.76, pf(u, v, 10, 5, 513)) * 0.7, iron = ss(0.6, 0.78, pf(u, v, 3, 4, 523));
+      let base = (116 + (n - 0.5) * 76 + (mot - 0.5) * 34 + (big - 0.5) * 30 + (bedTone - 0.5) * 16 + (g - 0.5) * 16 + (gtone - 0.5) * 22 - ge * 18 - (streak - 0.5) * 40) * crys;
+      let r = base * (1.03 + iron * 0.12), gg = base * (1.0 + iron * 0.02), b = base * (0.93 - iron * 0.07);
+      let h = 0.25 + n * 0.45 + (mot - 0.5) * 0.2 + (bedTone - 0.5) * 0.1 - seam * 0.2 + (gtone - 0.5) * 0.08 - ge * 0.1;
+      r *= 1 - seam * 0.25 - frac * 0.45; gg *= 1 - seam * 0.25 - frac * 0.45; b *= 1 - seam * 0.22 - frac * 0.42; h *= 1 - frac * 0.6;
+      if (lich) { r = lerp(r, 118, lich * 0.5); gg = lerp(gg, 124, lich * 0.5); b = lerp(b, 86, lich * 0.5); }
+      if (lw) { r = lerp(r, 176, lw * 0.4); gg = lerp(gg, 174, lw * 0.4); b = lerp(b, 162, lw * 0.4); }
+      put(d, k, r, gg, b, clamp(h, 0, 1)); } });
+  // ---- sand: grains and wind ripples
+  T.sand = make(d => { for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const u = i / S, v = j / S, k = (j * S + i) * 4;
+      const n = pf(u, v, 4, 5, 601), g = _ih(i, j, 603), rp = 0.5 + 0.5 * Math.sin((u * 13 + pf(u, v, 2, 3, 605) * 2.2) * Math.PI * 2);
+      const dark = g > 0.985 ? 0.75 : 1, light = g < 0.01 ? 1.15 : 1;
+      put(d, k, (190 + n * 30 + (g - 0.5) * 24) * dark * light, (174 + n * 26 + (g - 0.5) * 22) * dark * light, (136 + n * 22 + (g - 0.5) * 18) * dark * light, 0.3 + rp * 0.35 + n * 0.25 + g * 0.08); } });
+  // ---- forest floor: dark humus, leaf litter, twigs and moss
+  { const hum = field((u, v) => { const n = pf(u, v, 6, 5, 701), m = ss(0.55, 0.7, pf(u, v, 4, 3, 703)); return [lerp(44 + n * 26, 58, m), lerp(36 + n * 20, 72, m), lerp(24 + n * 12, 30, m)]; });
+    const lp = [[96, 74, 48], [82, 62, 40], [112, 92, 62], [70, 56, 38], [92, 86, 52], [118, 100, 70], [60, 48, 32], [84, 90, 54]];
+    T.forest = strokes(hum, '#000', 30000, (r, t) => { const x = r() * S, y = r() * S, twig = r() < 0.06, col = lp[(r() * lp.length) | 0], li = 0.7 + t * 0.4, hv = clamp(50 + t * 205, 0, 255) | 0, a = r() * 6.28;
+      if (twig) { const L = 20 + r() * 50; return { x, y, col: 'rgb(' + (60 * li | 0) + ',' + (46 * li | 0) + ',' + (32 * li | 0) + ')', hcol: 'rgb(' + hv + ',' + hv + ',' + hv + ')', paint: (c, px, py, cl) => { c.strokeStyle = cl; c.lineWidth = 2; c.beginPath(); c.moveTo(px, py); c.lineTo(px + Math.cos(a) * L, py + Math.sin(a) * L); c.stroke(); } }; }
+      const rx = 5 + r() * 8, ry = rx * (0.35 + r() * 0.3);
+      return { x, y, col: 'rgb(' + (col[0] * li | 0) + ',' + (col[1] * li | 0) + ',' + (col[2] * li | 0) + ')', hcol: 'rgb(' + hv + ',' + hv + ',' + hv + ')', paint: (c, px, py, cl) => { c.fillStyle = cl; c.beginPath(); c.ellipse(px, py, rx, ry, a, 0, 6.28); c.fill(); } }; }, 751); }
+  // ---- gravel: rounded stones of mixed size and colour, packed in a sandy, dusty matrix
+  T.gravel = make(d => { for (let j = 0; j < S; j++) for (let i = 0; i < S; i++) { const u = i / S, v = j / S, k = (j * S + i) * 4;
+      const n = pf(u, v, 6, 4, 811), g = _ih(i, j, 803);
+      let r = 92 + n * 30 + (g - 0.5) * 18, gg = 82 + n * 26 + (g - 0.5) * 16, b = 66 + n * 20 + (g - 0.5) * 12, h = 0.1 + n * 0.1;
+      for (const [C, sd] of [[46, 801], [95, 805]]) { wor(u, v, C, sd, W3); const id = W3[2], rad = 0.34 + 0.16 * _ih((id * 9973) | 0, 2, sd); if (W3[0] > rad) continue;
+        const q = W3[0] / rad, dome = Math.sqrt(Math.max(0, 1 - q * q)), t = _ih((id * 7919) | 0, 5, sd), tone = 0.62 + 0.55 * t, warm = (_ih((id * 4447) | 0, 6, sd) - 0.35) * 34, sh = 0.55 + 0.45 * dome;
+        const hh = 0.35 + dome * 0.6 + (C > 60 ? -0.1 : 0); if (hh > h) { r = (126 * tone + warm) * sh; gg = (120 * tone + warm * 0.4) * sh; b = (110 * tone - warm * 0.3) * sh; h = hh; } }
+      put(d, k, r, gg, b, h); } });
+  // ---- four unrelated noises for colour variation over large areas
+  T.noise = (() => { const N = 512, d = new Uint8Array(N * N * 4); for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const u = i / N, v = j / N, k = (j * N + i) * 4;
+      d[k] = pf(u, v, 4, 5, 901) * 255; d[k + 1] = pf(u, v, 5, 5, 911) * 255; d[k + 2] = pf(u, v, 6, 4, 921) * 255; d[k + 3] = pf(u, v, 8, 4, 931) * 255; }
+    const t = new TH.DataTexture(d, N, N, TH.RGBAFormat, TH.UnsignedByteType); t.wrapS = t.wrapT = TH.RepeatWrapping; t.minFilter = TH.LinearMipmapLinearFilter; t.magFilter = TH.LinearFilter; t.generateMipmaps = true; t.needsUpdate = true; return t; })();
+  TERR.tex = T; TERR.texMs = performance.now() - t0;
+}
+
+/* ---------------------------------------------------------------- 3. the terrain material */
+function terrMaterial() {
   const matTex = new TH.DataTexture(MATPIX, MW, MH, TH.LuminanceFormat, TH.UnsignedByteType); matTex.magFilter = matTex.minFilter = TH.NearestFilter; matTex.flipY = false; matTex.needsUpdate = true;
-  const mat = std({ roughness: 0.95, polygonOffset: true, polygonOffsetFactor: 1.5, polygonOffsetUnits: 3 });   // the ground sits behind everything laid on it
-  const T = [TEX.grass, TEX.sand, TEX.forest, TEX.crop, TEX.dirt, TEX.stubble, TEX.paving, TEX.asphalt, TEX.rock, TEX.macro];
+  const mat = std({ roughness: 0.9, envMapIntensity: 0.55, polygonOffset: true, polygonOffsetFactor: 1.5, polygonOffsetUnits: 3 });
+  const T = TERR.tex;
   mat.onBeforeCompile = sh => {
-    sh.uniforms.uMat = { value: matTex }; sh.uniforms.uOrigin = { value: new TH.Vector2(OX, OZ) }; sh.uniforms.uMatSize = { value: new TH.Vector2(MW, MH) }; sh.uniforms.uMRes = { value: MRES };
-    sh.uniforms.uWaterY = { value: WATER_Y };
-    T.forEach((t, i) => sh.uniforms['t' + i] = { value: t });
+    Object.assign(sh.uniforms, { uMat: { value: matTex }, uNrm: { value: TERR.nrm }, uDat: { value: TERR.data }, uNoise: { value: T.noise },
+      tG: { value: T.grass }, tD: { value: T.dirt }, tR: { value: T.rock }, tS: { value: T.sand }, tF: { value: T.forest }, tV: { value: T.gravel },
+      uOrigin: { value: new TH.Vector2(OX, OZ) }, uSize: { value: new TH.Vector2(WD.size[0], WD.size[1]) }, uMatSize: { value: new TH.Vector2(MW, MH) }, uMRes: { value: MRES }, uWaterY: { value: WATER_Y }, uQ: { value: TERR.q } });
     sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vW;').replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvW = (modelMatrix * vec4(transformed,1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader.replace('#include <common>', `#include <common>
-varying vec3 vW; uniform sampler2D uMat; uniform vec2 uOrigin; uniform vec2 uMatSize; uniform float uMRes; uniform float uWaterY;
-uniform sampler2D t0; uniform sampler2D t1; uniform sampler2D t2; uniform sampler2D t3; uniform sampler2D t4; uniform sampler2D t5; uniform sampler2D t6; uniform sampler2D t7; uniform sampler2D t8; uniform sampler2D t9;
+varying vec3 vW;
+uniform sampler2D uMat, uNrm, uDat, uNoise, tG, tD, tR, tS, tF, tV;
+uniform vec2 uOrigin, uSize, uMatSize; uniform float uMRes, uWaterY, uQ;
+vec3 tNW; float tRough; float tAO;
 float W[10];
 void addW(float idx, float w){ int k = int(idx*255.0+0.5);
   if(k==0)W[0]+=w; else if(k==1)W[1]+=w; else if(k==2)W[2]+=w; else if(k==3)W[3]+=w; else if(k==4)W[4]+=w; else if(k==5)W[5]+=w; else if(k==6)W[6]+=w; else if(k==7)W[7]+=w; else if(k==8)W[8]+=w; else W[9]+=w; }
+// a texture read twice, the second turned and shifted, mixed by a noise: no tiling to be seen
+vec4 tx2(sampler2D t, vec2 uv, float k){ vec4 a = texture2D(t, uv); vec2 r = vec2(uv.x*0.809 - uv.y*0.588, uv.x*0.588 + uv.y*0.809)*0.71 + vec2(0.37, 0.61); vec4 b = texture2D(t, r); return mix(a, b, k); }
+vec3 lin(vec3 c){ return c*c*(c*0.305306011+0.682171111)+c*0.012522878; }
 `).replace('#include <map_fragment>', `
+{
+vec2 uv = vW.xz; float dist = distance(vW, cameraPosition);
+vec2 dUV = (vW.xz - uOrigin) / uSize;
+vec4 dat = texture2D(uDat, dUV); float prot = dat.r*40.0, moist = dat.g, wild = dat.b, wdist = dat.a*60.0;
+vec4 nA = texture2D(uNrm, dUV); vec3 nW = normalize(nA.xyz*2.0 - 1.0); float aoL = nA.a;
+vec4 NZ1 = texture2D(uNoise, uv/460.0), NZ2 = texture2D(uNoise, uv/121.0), NZ3 = texture2D(uNoise, uv/31.0), NZ4 = texture2D(uNoise, uv/6.7);
+float n1 = NZ1.r, n2 = NZ2.g, n3 = NZ3.b, n4 = NZ4.a, nm = NZ3.r;
+// the material map, with ragged, organic edges between its 2 m cells
 for(int i=0;i<10;i++) W[i]=0.0;
 vec2 mp = (vW.xz - uOrigin)/uMRes - 0.5; vec2 f = fract(mp); vec2 b0 = floor(mp);
-// soften the 2 m cells: a little noise in the blend position
-f = clamp(f + (texture2D(t9, vW.xz/37.0).r-0.6)*0.6, 0.0, 1.0);
+f = clamp(f + (nm-0.5)*1.4 + (n4-0.5)*0.7, 0.0, 1.0);
 addW(texture2D(uMat,(b0+vec2(0.5,0.5))/uMatSize).r,(1.0-f.x)*(1.0-f.y));
 addW(texture2D(uMat,(b0+vec2(1.5,0.5))/uMatSize).r,f.x*(1.0-f.y));
 addW(texture2D(uMat,(b0+vec2(0.5,1.5))/uMatSize).r,(1.0-f.x)*f.y);
 addW(texture2D(uMat,(b0+vec2(1.5,1.5))/uMatSize).r,f.x*f.y);
-vec2 uv = vW.xz;
-vec3 c = vec3(0.0);
-if(W[0]>0.0) c += W[0]*texture2D(t0, uv/7.0).rgb;
-if(W[1]>0.0) c += W[1]*texture2D(t1, uv/5.0).rgb;
-if(W[2]>0.0) c += W[2]*texture2D(t2, uv/6.0).rgb;
-if(W[3]>0.0) c += W[3]*texture2D(t3, uv/12.0).rgb;
-if(W[4]>0.0) c += W[4]*texture2D(t4, uv/6.0).rgb;
-if(W[5]>0.0) c += W[5]*texture2D(t5, uv/8.0).rgb;
-if(W[6]>0.0) c += W[6]*texture2D(t6, uv/4.0).rgb;
-if(W[7]>0.0) c += W[7]*texture2D(t7, uv/9.0).rgb;
-if(W[8]>0.0) c += W[8]*mix(texture2D(t0, uv/7.0).rgb, vec3(0.55,0.52,0.30), 0.25);
-if(W[9]>0.0) c += W[9]*texture2D(t8, uv/5.0).rgb;
-c = pow(c, vec3(2.2));   // the splat textures are sRGB
-// large-scale colour variation so the grass never tiles visibly
-float macro = texture2D(t9, uv/310.0).r * texture2D(t9, uv/97.0).r;
-c *= mix(0.78, 1.12, macro);
-// wet sand and underwater darkening near the waterline
-float wet = smoothstep(uWaterY+0.5, uWaterY-0.2, vW.y);
-c = mix(c, c*vec3(0.62,0.6,0.55), wet);
-c = mix(c, c*vec3(0.45,0.6,0.6), smoothstep(uWaterY-0.3, uWaterY-4.0, vW.y));
-diffuseColor.rgb *= c;`);
+float slope = 1.0 - nW.y;
+// fields: rows of crop, furrows of ploughed soil, rows of stubble
+vec2 rd = vec2(0.92, 0.39); float rowp = dot(uv, rd);
+float crop = smoothstep(0.15, 0.65, sin(rowp*8.38)*0.5+0.5 + (n4-0.5)*0.5);
+float furrow = sin(rowp*10.5);
+float wG = W[0] + W[8] + W[3]*crop*0.9 + W[5]*0.55;
+float wD = W[4] + W[3]*(1.0 - crop*0.9) + W[5]*0.45;
+float wF = W[2], wS = W[1], wV = W[6] + W[7], wR = W[9];
+float dryAdd = W[8]*0.3 + W[5]*0.85 + W[3]*0.1;
+// soil showing through thin grass: on slopes, on dry rises, in worn patches
+float bare = smoothstep(0.6, 0.78, n2*0.55 + n3*0.45 + slope*1.4 - moist*0.25 + (1.0 - aoL)*0.2);
+float toD = wG*bare*0.8; wG -= toD; wD += toD;
+// worn verges beside roads and paths, kerbs and lots: packed gravel and dirt
+float verge = smoothstep(3.6, 0.6, prot + (n4-0.5)*2.4 + (nm-0.5)*2.0) * (1.0 - wS*0.8);
+float vg = (wG + wF)*verge; wG -= wG*verge; wF -= wF*verge; wV += vg*0.55; wD += vg*0.45;
+// rock where it's steep, and outcrops on the wildest high ground
+float rk = smoothstep(0.1, 0.24, slope + (n3-0.5)*0.1) + smoothstep(0.78, 0.92, n1*0.45 + n2*0.55)*wild*0.9;
+rk = clamp(rk, 0.0, 1.0)*(1.0 - wS*0.6)*(1.0 - smoothstep(1.0, 0.0, prot)*0.8);
+float keep = 1.0 - rk; wG *= keep; wD *= keep; wF *= keep; wS *= keep; wV *= keep; wR = wR*keep + rk;
+// shoreline: wet, dark mud where grass meets the water
+float shore = smoothstep(4.0, 0.5, wdist + (n4-0.5)*3.0) * (1.0 - wS);
+float toM = (wG + wF)*shore*0.85; wG -= wG*shore*0.85; wF -= wF*shore*0.85; wD += toM;
+// the surfaces themselves
+float kk = smoothstep(0.35, 0.65, n3);
+vec4 G = tx2(tG, uv/2.7, kk), D = tx2(tD, uv/3.3, 1.0-kk), F = tx2(tF, uv/3.1, kk), Sd = tx2(tS, uv/3.6, kk), V = texture2D(tV, uv/2.3);
+vec3 bw = pow(abs(nW), vec3(4.0)); bw /= (bw.x + bw.y + bw.z);
+vec4 Rk = texture2D(tR, vW.zy/6.5)*bw.x + texture2D(tR, uv/6.5 + vec2(0.31,0.17))*bw.y + texture2D(tR, vW.xy/6.5)*bw.z;
+// a second, far scale of the grass and soil, so the pattern changes over tens of metres too
+vec4 Gf = texture2D(tG, uv/23.0); G.rgb = mix(G.rgb, G.rgb*(0.75 + 0.5*Gf.rgb/max(dot(Gf.rgb, vec3(0.333)), 0.05)*0.5), 0.35);
+// blend by height: grass blades stand over soil, stones over sand; the transitions break up like the real thing
+float hG = G.a, hD = D.a*0.9, hF = F.a*0.95, hS = Sd.a*0.7, hV = V.a, hR = Rk.a*1.1 + 0.1;
+float k = 0.65;
+float m = max(max(max(wG + hG*k, wD + hD*k), max(wF + hF*k, wS + hS*k)), max(wV + hV*k, wR + hR*k)) - 0.22;
+float bG = max(wG + hG*k - m, 0.0)*step(0.001, wG), bD = max(wD + hD*k - m, 0.0)*step(0.001, wD), bF = max(wF + hF*k - m, 0.0)*step(0.001, wF);
+float bS = max(wS + hS*k - m, 0.0)*step(0.001, wS), bV = max(wV + hV*k - m, 0.0)*step(0.001, wV), bR = max(wR + hR*k - m, 0.0)*step(0.001, wR);
+float bt = bG + bD + bF + bS + bV + bR + 1e-5; bG /= bt; bD /= bt; bF /= bt; bS /= bt; bV /= bt; bR /= bt;
+// colour, in linear light
+vec3 cG = lin(G.rgb), cD = lin(D.rgb), cF = lin(F.rgb), cS = lin(Sd.rgb), cV = lin(V.rgb), cR = lin(Rk.rgb);
+// grass: lush and dark where it's wet and low, straw-coloured on dry rises, slopes and in late fields
+float dry = clamp(0.32 + (n1-0.5)*0.9 + (n2-0.5)*0.45 - moist*0.75 + dryAdd + slope*0.9 + smoothstep(4.0, 14.0, vW.y)*0.22 + (1.0-aoL)*-0.2, 0.0, 1.0);
+cG *= mix(vec3(0.74, 0.92, 0.6), vec3(1.42, 1.18, 0.66), dry);
+cG *= mix(0.78, 1.1, n2)*mix(0.88, 1.08, n4);
+// clover and darker clumps
+cG *= mix(1.0, 0.8, smoothstep(0.62, 0.8, nm)*(1.0 - dry));
+// soil: darker and richer when damp, furrowed in ploughed fields
+cD *= mix(1.0, 0.62, clamp(moist*0.8 + shore*0.6, 0.0, 1.0))*mix(0.86, 1.1, n2);
+cD *= mix(1.0, 0.78 + 0.22*(furrow*0.5+0.5), W[4]);
+cF *= mix(0.85, 1.12, n2);
+cS *= mix(0.9, 1.06, n2);
+cR *= mix(vec3(0.92, 0.94, 1.0), vec3(1.06, 1.0, 0.9), n1)*mix(0.85, 1.1, n3);
+vec3 c = cG*bG + cD*bD + cF*bF + cS*bS + cV*bV + cR*bR;
+// a little less saturated than a texture painter would like: real ground is muted
+float lum = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(lum), c, 0.86);
+// wet sand and soil at the water's edge, darker still underwater
+float wet = smoothstep(uWaterY+0.9, uWaterY+0.05, vW.y)*smoothstep(12.0, 3.0, wdist) + shore*0.6;
+wet = clamp(wet, 0.0, 1.0);
+c = mix(c, c*vec3(0.58, 0.56, 0.52), wet);
+c = mix(c, c*vec3(0.45, 0.6, 0.6), smoothstep(uWaterY-0.3, uWaterY-4.0, vW.y));
+// small hollows between grains, stones and blades: darker
+float Hb = hG*bG + hD*bD + hF*bF + hS*bS + hV*bV + hR*bR;
+float cav = mix(0.55, 1.0, smoothstep(0.05, 0.75, Hb));
+float near = 1.0 - smoothstep(18.0, 140.0, dist);
+c *= mix(1.0, cav, 0.45*near);
+diffuseColor.rgb *= c;
+// roughness: rock a little smoother where weathered, wet ground glistens
+float rN = 0.95*bG + 0.9*bD + 0.92*bF + 0.86*bS + 0.84*bV + (0.7 + 0.18*n4)*bR;
+tRough = mix(rN, 0.32, wet*0.9);
+// ambient occlusion: the hills around, and the small hollows
+tAO = aoL * mix(1.0, cav, 0.6*near + 0.15);
+// the surface's own relief, in metres, for the detail normal
+float Hm = hG*bG*0.035 + hD*bD*0.022 + hF*bF*0.03 + hS*bS*0.012 + hV*bV*0.035 + hR*bR*0.09 + W[4]*furrow*0.05*bD;
+Hm *= 1.0 - smoothstep(30.0, 170.0, dist)*0.88;
+vec3 sx = dFdx(vW), sy = dFdy(vW); vec3 R1 = cross(sy, nW), R2 = cross(nW, sx); float fd = dot(sx, R1);
+vec3 gr = sign(fd)*(dFdx(Hm)*R1 + dFdy(Hm)*R2);
+tNW = normalize(abs(fd)*nW - gr);
+if(!(fd == fd) || abs(fd) < 1e-9) tNW = nW;
+}`).replace('#include <roughnessmap_fragment>', 'float roughnessFactor = tRough;')
+      .replace('#include <normal_fragment_maps>', 'normal = normalize((viewMatrix * vec4(tNW, 0.0)).xyz);')
+      .replace('#include <aomap_fragment>', `{ float ambientOcclusion = tAO; reflectedLight.indirectDiffuse *= ambientOcclusion;
+  #if defined( USE_ENVMAP ) && defined( STANDARD )
+  reflectedLight.indirectSpecular *= mix(1.0, ambientOcclusion, 0.8);
+  #endif
+}`);
     mat.userData.shader = sh;
   };
-  const g0 = new TH.Group();
-  for (let cz = 0; cz < nz; cz += CN) for (let cx = 0; cx < nx; cx += CN) {
-    const w = Math.min(CN, nx - cx), d = Math.min(CN, nz - cz), pos = new Float32Array((w + 1) * (d + 1) * 3), idx = [];
-    for (let j = 0; j <= d; j++) for (let i = 0; i <= w; i++) { const x = OX + (cx + i) * step, z = OZ + (cz + j) * step, k = (j * (w + 1) + i) * 3; pos[k] = x; pos[k + 1] = heightAt(x, z); pos[k + 2] = z; }
-    for (let j = 0; j < d; j++) for (let i = 0; i < w; i++) { const a = j * (w + 1) + i, b = a + 1, c = a + w + 1, e = c + 1; idx.push(a, c, b, b, c, e); }
-    const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals(); g.computeBoundingSphere();
-    let minY = 1e9; for (let k = 1; k < pos.length; k += 3) minY = Math.min(minY, pos[k]);
-    if (minY < WATER_Y - 9.5 && Math.max(...Array.from(pos).filter((_, k) => k % 3 === 1)) < WATER_Y - 9) continue;   // deep open sea: nothing to see
-    const m = new TH.Mesh(g, mat); m.receiveShadow = true; g0.add(m); TERRAIN.push(m);
+  mat.extensions = { derivatives: true }; mat.customProgramCacheKey = () => 'terr2';
+  return mat;
+}
+
+/* ---------------------------------------------------------------- 4. geometry: chunks with three levels of detail */
+const TERR_LOD = [2, 4, 8];
+const _tIdx = {};
+function terrIndex(n) { if (_tIdx[n]) return _tIdx[n]; const idx = [], v = n + 1;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) { const a = j * v + i, b = a + 1, c = a + v, e = c + 1; idx.push(a, c, b, b, c, e); }
+  // skirts: a curtain hanging under each edge, hiding the gap where a finer chunk meets a coarser one
+  const base = v * v, edges = []; for (let i = 0; i <= n; i++) edges.push([i, 0]); for (let j = 1; j <= n; j++) edges.push([n, j]); for (let i = n - 1; i >= 0; i--) edges.push([i, n]); for (let j = n - 1; j >= 1; j--) edges.push([0, j]);
+  for (let e = 0; e < edges.length; e++) { const p = edges[e], q = edges[(e + 1) % edges.length], a = p[1] * v + p[0], b = q[1] * v + q[0], a2 = base + e, b2 = base + (e + 1) % edges.length; idx.push(a, b, a2, b, b2, a2, a, a2, b, b, a2, b2); }
+  const r = { idx: new TH.BufferAttribute(new Uint32Array(idx), 1), edges }; _tIdx[n] = r; return r; }
+function terrGeo(C, l) { const st = TERR_LOD[l], n = Math.round(TERR.CHS / st), v = n + 1, I = terrIndex(n), nv = v * v + I.edges.length;
+  const pos = new Float32Array(nv * 3), nor = new Float32Array(nv * 3), hd = Math.max(1, st * 0.5);
+  for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) { const x = C.x0 + i * st, z = C.z0 + j * st, k = (j * v + i) * 3, h = heightAt(x, z);
+    pos[k] = i * st; pos[k + 1] = h; pos[k + 2] = j * st;
+    const nx = -(heightAt(x + hd, z) - heightAt(x - hd, z)) / (2 * hd), nz = -(heightAt(x, z + hd) - heightAt(x, z - hd)) / (2 * hd), L = Math.hypot(nx, 1, nz); nor[k] = nx / L; nor[k + 1] = 1 / L; nor[k + 2] = nz / L; }
+  const drop = 3 + st * 1.5;
+  I.edges.forEach((p, e) => { const s = (p[1] * v + p[0]) * 3, k = (v * v + e) * 3; pos[k] = pos[s]; pos[k + 1] = pos[s + 1] - drop; pos[k + 2] = pos[s + 2]; nor[k] = nor[s]; nor[k + 1] = nor[s + 1]; nor[k + 2] = nor[s + 2]; });
+  const g = new TH.BufferGeometry(); g.setAttribute('position', new TH.BufferAttribute(pos, 3)); g.setAttribute('normal', new TH.BufferAttribute(nor, 3)); g.setIndex(I.idx); g.computeBoundingSphere(); return g; }
+function buildTerrain() {
+  if (!TERR.data) { terrSculpt(); terrTex(); }
+  const mat = TERR.mat = terrMaterial(), CHS = TERR.CHS, nx = Math.ceil(WD.size[0] / CHS), nz = Math.ceil(WD.size[1] / CHS), g0 = new TH.Group();
+  for (let cz = 0; cz < nz; cz++) for (let cx = 0; cx < nx; cx++) {
+    const x0 = OX + cx * CHS, z0 = OZ + cz * CHS; let mx = -1e9;
+    for (let j = 0; j <= 12; j++) for (let i = 0; i <= 12; i++) mx = Math.max(mx, heightAt(x0 + i * CHS / 12, z0 + j * CHS / 12));
+    if (mx < WATER_Y - 9) continue;   // deep open sea: nothing to see
+    const C = { x0, z0, cx: x0 + CHS / 2, cz: z0 + CHS / 2, geo: [null, null, null], l: 2, want: 2 };
+    C.geo[2] = terrGeo(C, 2);
+    const m = new TH.Mesh(C.geo[2], mat); m.position.set(x0, 0, z0); m.receiveShadow = true; m.castShadow = false; m.matrixAutoUpdate = false; m.updateMatrix(); C.mesh = m;
+    g0.add(m); TERRAIN.push(m); TERR.chunks.push(C);
   }
-  ROOT.add(g0);
+  ROOT.add(g0); TERR.ready = true;
+}
+// each frame: which level each chunk wants, and building what's missing nearest first, a few milliseconds at a time
+function terrLOD() {
+  if (!TERR.ready || typeof camera === 'undefined' || !camera) return;
+  const q = window.TERR_Q != null ? window.TERR_Q : TERR.q; if (q !== TERR.q) { TERR.q = q; if (TERR.mat && TERR.mat.userData.shader) TERR.mat.userData.shader.uniforms.uQ.value = q; }
+  const cp = camera.position;if (TERR.lx == null || Math.hypot(cp.x - TERR.lx, cp.z - TERR.lz) > 120) TERR.burst = true; TERR.lx = cp.x; TERR.lz = cp.z;
+  const r0 = [80, 120, 170, 230][q] || 170, r1 = [240, 340, 450, 600][q] || 450, half = TERR.CHS / 2;
+  const need = [];
+  for (const C of TERR.chunks) {
+    const dx = Math.max(0, Math.abs(cp.x - C.cx) - half), dz = Math.max(0, Math.abs(cp.z - C.cz) - half), d = Math.hypot(dx, dz, Math.max(0, cp.y - 40) * 0.5);
+    // a little hysteresis so a chunk on the boundary doesn't flick between levels
+    const hy = C.l === 0 ? 1.15 : C.l === 1 ? 1.1 : 1;
+    const want = d < r0 * (C.l === 0 ? hy : 1) ? 0 : d < r1 * (C.l <= 1 ? hy : 1) ? 1 : 2;
+    C.want = want; C.d = d;
+    if (!C.geo[want]) need.push(C);
+    else if (C.l !== want) { C.l = want; C.mesh.geometry = C.geo[want]; C.mesh.castShadow = want === 0; }
+    // let go of fine levels a long way off
+    if (C.geo[0] && C.l !== 0 && d > r0 * 2.2) { C.geo[0].dispose(); C.geo[0] = null; }
+    if (C.geo[1] && C.l !== 1 && d > r1 * 1.8) { C.geo[1].dispose(); C.geo[1] = null; }
+  }
+  if (!need.length) return;
+  need.sort((a, b) => a.d - b.d);
+  const t0 = performance.now(), budget = TERR.burst ? 60 : 5;
+  for (const C of need) { if (performance.now() - t0 > budget) break; C.geo[C.want] = terrGeo(C, C.want); TERR.built++;
+    C.l = C.want; C.mesh.geometry = C.geo[C.want]; C.mesh.castShadow = C.want === 0; }
+  TERR.burst = false;
 }
 
 /* ---------------------------------------------------------------------------
@@ -13798,7 +14194,9 @@ function buildBuildings() {
 --------------------------------------------------------------------------- */
 const TREES = new TH.Group();
 /* distance culling for tree chunks; only nearby trees cast shadows */
-function cullTrees() {
+function cullTrees(){terrCull_();return cullTrees_.apply(this,arguments);}
+function terrCull_(){try{terrLOD();}catch(e){console.warn('terrain lod',e);}}
+function cullTrees_() {
   const cx = camera.position.x, cz = camera.position.z, far = 1400 + camera.position.y * 2;
   TREES.children.forEach(m => { if (m.userData.treeLo) return; const c = m.geometry.boundingSphere.center, d = Math.hypot(c.x - cx, c.z - cz) - m.geometry.boundingSphere.radius;
     const lo = m.userData.lo, near = d < (window.BAY_TREE_LOD || 300), F = m.userData.far || far;
@@ -20441,6 +20839,11 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Terrain overhaul: the countryside has real shape now: eroded hills and ridgelines, valleys and hollows, rock escarpments and gullies, all blending smoothly into the city, roads and shore',
+    'The ground itself: detailed grass, soil with stones, rock, sand, forest litter and gravel, blended naturally by height and slope, with surface relief, ambient occlusion and per-material roughness',
+    'Natural variation: lush grass in damp hollows, dry straw on rises and slopes, worn gravel verges beside roads, wet mud at the water\'s edge',
+    'Finer terrain near you and lighter far away, with lighting that stays steady as detail changes',
+    'Atmosphere: haze that sits low in valleys and over the water and thins with height; a slightly lower, stronger midday sun',
     'Car alarms go off again when you break into a parked car (and ATM alarms still ring)',
     'Online: pausing (and the settings and full map from it) no longer stops your game: the world keeps going for everyone, so your police, traffic and people don\'t vanish from the others\' screens',
     'Online: riding in another player\'s car is solid: you\'re no longer thrown out or knocked over by the car you\'re in, you sit exactly in the seat at any speed, the car camera follows, and a brief network hiccup doesn\'t drop you',
@@ -20615,6 +21018,7 @@ function gfxApply(){if(!renderer||!sun)return;const g=CFG.gfx;
   let remat=false;if(renderer.shadowMap.type!==type){renderer.shadowMap.type=type;remat=true;}if(renderer.toneMapping!==tm){renderer.toneMapping=tm;remat=true;}
   if(remat)markAllMaterials();
   if(post)postBuild();else postDispose();
+  window.TERR_Q={low:0,medium:1,high:2,ultra:3}[lv]!=null?{low:0,medium:1,high:2,ultra:3}[lv]:2;
   reflSetup();lightsSync();beamsSetup();wreflSetup();
   window.BAY_WIN=+g.winLights||1;}
 /* ---- the sun's shadow: a tight depth range (so the bias is centimetres, not metres) and snapped to its texels (no shimmer) ---- */
