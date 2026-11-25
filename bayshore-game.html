@@ -14444,7 +14444,7 @@ npcPose = function (root, t, gait, dt) {
   const every = d > 75 ? 3 : d > 38 ? 2 : 1; st.acc = (st.acc || 0) + dt; st.fr = ((st.fr || 0) + 1) % every;
   // what the body is really doing: its speed over the ground and how fast it turns
   const node = root.parent, hs = root.scale.y || 1;
-  if (node) { const P = node.position; if (st.mx != null && dt > 0) { const dd = Math.hypot(P.x - st.mx, P.z - st.mz); if (dd < 2.5) { const raw = dd / dt / hs; st.sm = (st.sm || 0) + (raw - (st.sm || 0)) * Math.min(1, dt * 9); } } st.mx = P.x; st.mz = P.z; }
+  if (node) { const P = (st._wp || (st._wp = new PH.Vector3())).setFromMatrixPosition(root.matrixWorld); if (st.mx != null && dt > 0) { const dd = Math.hypot(P.x - st.mx, P.z - st.mz); if (dd < 2.5) { const raw = dd / dt / hs; st.sm = (st.sm || 0) + (raw - (st.sm || 0)) * Math.min(1, dt * 9); } } st.mx = P.x; st.mz = P.z; }
   const yaw = ((root.parent && root.parent.rotation.y) || 0) + root.rotation.y;
   if (st.yaw != null && dt > 0) { st.yr = (st.yr || 0) + (_cl(_wr(yaw - st.yaw) / dt, -7, 7) - (st.yr || 0)) * Math.min(1, dt * 6); st.ac = (st.ac || 0) + (_cl((st.v - st.v0) / dt, -4, 4) - (st.ac || 0)) * Math.min(1, dt * 5); }
   st.yaw = yaw; st.v0 = st.v;
@@ -19772,18 +19772,43 @@ function handleOpenL(v,r){const d=r.door,a=d.pivot.rotation[d.axis];d.pivot.rota
 // the window in a front door, and the inside lock button just behind it
 const doorWin=(v,r)=>(v.windows||[]).find(W=>W.part===r.door);
 function lockW(v,r){const h=toL(v,handleW(r));return v.node.localToWorld(new THREE.Vector3(h.x+0.28,h.y+0.26,h.z-r.sg*0.38));}
+/* ---- getting in and out, the way people do it ----
+   The legs walk every move (the speed of the body in the car's frame picks the gait, and the stride fits the ground
+   covered; turning on the spot takes small steps). Getting in: walk to the door, take the handle (a locked one is
+   tried first: a pull, another, it won't give), pull it open stepping back out of its way, step into the gap and
+   turn your back to the seat, lower yourself onto its edge with the head ducked under the roof and a hand on the door
+   frame, feet staying where they stood, then pivot in, lifting the legs over the sill, and pull the door shut.
+   Getting out is the same in reverse: legs out and down, feet on the ground, weight forward over them and up, a hand
+   on the frame, a step away, and the door. */
+function seqLegs(g,S,dt){const st=npcState(g),lp=S.lp||S.pos.clone(),spd=dt>0?Math.hypot(S.pos.x-lp.x,S.pos.z-lp.z)/dt:0;S.lp=S.pos.clone();
+  const gv=clamp(spd/1.4,0,1);st.v=gv;npcPose(g,ME.t,gv,dt);}
+// sitting sideways on a seat's edge: H the hips' height above the ground, ff how far ahead the feet are planted,
+// duck the head down under the roof, lean forward over the feet, lift the feet off the ground
+function sideSitPose(H,ff,duck,lean,lift){const p=PZ(),y=H-GA.F,a=gLeg(ff,y-lift),b=gLeg(Math.max(0,ff-0.05),y-lift*0.8);
+  p.hy=0.95;p.hp=[a[0],b[0]];p.kn=[a[1],b[1]];p.an=[-(a[0]+a[1]),-(b[0]+b[1])];p.hpx=[-0.06,-0.06];
+  p.spz=-0.05-lean-duck*0.32;p.hdz=0.05+duck*0.34;p.sh=[[0.28,0.12,0],[0.22,0.12,0]];p.el=[[0.75,0.1],[0.6,0.1]];return p;}
+// a hand on the top of the door opening (the roof's edge), over the seat
+const frameW=(v,r)=>{const sL=seatL(v,r);return v.node.localToWorld(new THREE.Vector3(sL.x+0.3,sL.y+1.6,r.hL0.z*0.93));};
+function sndLockedPull(){if(!sndOK())return;const t=DAC.currentTime;burst(t,0.03,1700,5,0.22);thump(t+0.005,210,120,0.07,0.16);}
+
 function carSeqStep(dt){const S=ME.seq,it=ME.it,g=it.g,v=S.v,r=S.r,rd=S.rd||r;S.t+=dt;
   const next=ph=>{S.ph=ph;S.t=0;S.from=S.pos.clone();S.rot0=S.rot;S.ev=0;};
   const hW=handleW(r),pW=pullW(r),ARM=armPole(r),hand=r.hand;
   const toCar=()=>{if(S.foot){S.foot=false;L.camReset();camBlend(0.9);}};
   if(S.kind==='in'){
     if((S.ph==='reach'||S.ph==='open')&&r.doorGone&&!v.locked){toCar();next(S.vic?'pull':'sit');return;}
-    if(S.ph==='reach'){const D=S.dur||(S.dur=clamp(S.from.distanceTo(S.stand)/3.6,0.22,0.5)),u=Math.min(1,S.t/D),hL=toL(v,hW);
-      S.pos.copy(S.from).lerp(S.stand,ezs(u));S.rot=S.rot0+wrapA(faceTo({pos:S.stand},hL)-S.rot0)*ezs(u);
-      npcPose(g,ME.t,0,dt);bodyAt(it,v,S.pos,S.rot);
-      if(v.locked){if(u>=1){S.dur=0;S.win=doorWin(v,r);next(S.win&&S.win.state!=='broken'?'elbow':'unlock');}return;}
-      const wk=ezs((S.t-0.06)/(D+0.08));armTo(g,hand,hW,wk);
-      if(wk>=1){S.dur=0;toCar();togglePart(r.door,true);next('open');}return;}
+    if(S.ph==='reach'){const D=S.dur||(S.dur=clamp(S.from.distanceTo(S.stand)/1.05,0.35,1.3)*(S.jack?0.8:1)),u=Math.min(1,S.t/D),hL=toL(v,hW);
+      S.pos.copy(S.from).lerp(S.stand,ezs(u));S.rot=S.rot0+wrapA(faceTo({pos:S.stand},hL)-S.rot0)*ezs(Math.min(1,u*1.25));
+      seqLegs(g,S,dt);bodyAt(it,v,S.pos,S.rot);
+      const wk=ezs((u-0.55)/0.45);if(wk>0)armTo(g,hand,hW,wk);
+      if(u>=1){S.dur=0;if(v.locked){S.win=doorWin(v,r);next('tug');return;}toCar();togglePart(r.door,true);next('open');}return;}
+    // locked: a pull on the handle, and another; it doesn't give; a look at the glass
+    if(S.ph==='tug'){const u=S.t;seqLegs(g,S,dt);bodyAt(it,v,S.pos,S.rot);
+      const out=new THREE.Vector3(0,0,r.sg).applyQuaternion(v.node.quaternion),pull=x=>x>0&&x<1?Math.sin(x*Math.PI):0,tg=pull((u-0.12)/0.2)+pull((u-0.44)/0.18)*0.8;
+      armTo(g,hand,hW.clone().addScaledVector(out,0.035*tg),u<0.8?1:1-ezs((u-0.8)/0.2));
+      const N=g.userData.npc;N.joints.spine.rotation.z+=0.05*tg;N.joints.head.rotation.z+=0.14*ezs((u-0.6)/0.3);N.joints.head.rotation.y+=-r.sg*0.15*ezs((u-0.6)/0.3);
+      if(!S.k1&&u>0.2){S.k1=1;sndLockedPull();}if(!S.k2&&u>0.52){S.k2=1;sndLockedPull();}
+      if(u>=1.0){S.dur=0;next(S.win&&S.win.state!=='broken'?'elbow':'unlock');}return;}
     // breaking in: an elbow through the door glass
     if(S.ph==='elbow'){const W=S.win,u=S.t,c=W?new THREE.Vector3(W.c.x,W.c.y,W.c.z):toL(v,hW);const cl=c.clone();cl.y=0;
       // side-on to the glass, the striking shoulder toward it: cock the elbow, lean away, then drive it sideways through
@@ -19800,15 +19825,32 @@ function carSeqStep(dt){const S=ME.seq,it=ME.it,g=it.g,v=S.v,r=S.r,rd=S.rd||r;S.
       const w=u<0.5?ezs(u/0.5):1-ezs((u-0.75)/0.35);armTo(g,hand,Lw,w,ARM);
       if(!S.click&&u>=0.55){S.click=true;sndUnlock();if(!v.alarm)alarmStart(v,30);}
       if(u>=1.1){v.locked=false;S.from=S.pos.clone();S.dur=0;S.ph='reach';S.t=0;S.rot0=S.rot;}return;}
-    if(S.ph==='open'){const hL=toL(v,hW),d=V3().subVectors(S.pos,hL);d.y=0;if(d.length()<0.5)S.pos.copy(hL).addScaledVector(d.normalize(),0.5).setY(0);
-      S.rot+=clamp(wrapA(faceTo(S,hL)-S.rot),-7*dt,7*dt);npcPose(g,ME.t,0,dt);bodyAt(it,v,S.pos,S.rot);
-      const f=doorFrac(r);S.w=f<0.7?1:Math.max(0,1-(f-0.7)/0.12);armTo(g,hand,hW,S.w);
-      if(f>0.82||S.t>1.1)next(S.vic?'pull':'sit');return;}
+    if(S.ph==='open'){const hL=toL(v,hW),f=doorFrac(r);
+      if(!S.bk)S.bk=S.pos.clone().add(new THREE.Vector3(-0.2,0,r.sg*0.14));   // a step back and out of the door's way as it swings
+      S.pos.lerp(S.bk,Math.min(1,dt*(S.jack?5:3.4)));S.rot+=clamp(wrapA(faceTo(S,hL)-S.rot),-5*dt,5*dt);
+      seqLegs(g,S,dt);bodyAt(it,v,S.pos,S.rot);
+      S.w=f<0.65?1:Math.max(0,1-(f-0.65)/0.15);armTo(g,hand,hW,S.w);
+      if(f>0.8||S.t>1.2){S.bk=null;next(S.vic?'pull':'sit');}return;}
     // a carjacking: both hands on them and out they come
     if(S.ph==='pull'){carJackPull(S,dt);if(S.t>=1.72){S.from=S.pos.clone();next('sit');S.from=S.pos.clone();}return;}
-    if(S.ph==='sit'){const u=Math.min(1,S.t/0.8),sL=seatL(v,r);S.pos.copy(bez(S.from,S.door,sL,ezs(u)));
-      S.pos.y=lerp(0,sL.y,ezs((u-0.35)/0.65));S.rot=S.rot0+wrapA(0-S.rot0)*ezs(u/0.7);
-      seatedPose(g,v,r,1-ezs((u-0.2)/0.7));bodyAt(it,v,S.pos,S.rot);if(u>=1){S.rot=0;next(r.doorGone?(r===rd?'wheel':'climb'):'reachIn');}return;}
+    // into the gap between the open door and the seat, turning so your back is to the seat
+    if(S.ph==='sit'){if(!S.gp){const sL=seatL(v,r);S.gp=new THREE.Vector3(sL.x+0.04,0,r.hL0.z+r.sg*0.22);S.ro=-r.sg*Math.PI/2+r.sg*0.25;S.gd=clamp(S.from.distanceTo(S.gp)/0.9,0.4,1.1)*(S.jack?0.8:1);}
+      const u=Math.min(1,S.t/S.gd);S.pos.copy(S.from).lerp(S.gp,ezs(u));S.rot=S.rot0+wrapA(S.ro-S.rot0)*ezs(Math.min(1,u*1.15));
+      seqLegs(g,S,dt);bodyAt(it,v,S.pos,S.rot);if(u>=1)next('lower');return;}
+    // down onto the seat's edge: feet where they stood, head ducked under the roof, a hand on the frame
+    if(S.ph==='lower'){const sL=seatL(v,r),E=new THREE.Vector3(sL.x+0.02,sL.y,sL.z+r.sg*0.13),u=Math.min(1,S.t/(S.jack?0.55:0.72)),e=ezs(u);
+      S.pos.set(lerp(S.gp.x,E.x,ezs(u*1.1)),lerp(0,E.y,ezs((u-0.1)/0.9)),lerp(S.gp.z,E.z,ezs(u*1.1)));
+      const f=new THREE.Vector3(Math.cos(S.rot),0,-Math.sin(S.rot)),ff=Math.max(0,V3().subVectors(S.gp,S.pos).setY(0).dot(f))+0.04*e;
+      const duck=Math.sin(Math.PI*Math.min(1,u*1.1))*0.8+e*0.25;
+      apply(g.userData.npc,sideSitPose(S.pos.y+0.95,ff,duck,0.1*Math.sin(Math.PI*u),0));bodyAt(it,v,S.pos,S.rot);
+      armTo(g,hand,frameW(v,r),Math.sin(Math.PI*Math.min(1,u*1.2))*0.9);
+      if(u>=1){S.ff=ff;next('swing');}return;}
+    // the pivot: round to face forward, the legs lifted in over the sill
+    if(S.ph==='swing'){const sL=seatL(v,r),u=Math.min(1,S.t/(S.jack?0.6:0.82)),e=ezs(u),arc=Math.sin(Math.PI*u),N=g.userData.npc,fit=r.seat.obj.userData.seatFit;
+      const E=new THREE.Vector3(sL.x+0.02,sL.y,sL.z+r.sg*0.13);S.pos.copy(E).lerp(sL,e);S.rot=S.ro*(1-e);
+      const a=sideSitPose(S.pos.y+0.95,S.ff||0.45,0.8*(1-e),0,arc*0.2),b=seatPose('drive',ME.t,N.recipe,fit);N.seatFit=fit;
+      const p=lerpP(a,b,e);p.hp[0]+=arc*0.45;p.hp[1]+=arc*0.55;p.kn[0]-=arc*0.5;p.kn[1]-=arc*0.6;apply(N,p);bodyAt(it,v,S.pos,S.rot);
+      if(u>=1){S.rot=0;S.pos.copy(sL);next(r.doorGone?(r===rd?'wheel':'climb'):'reachIn');}return;}
     if((S.ph==='reachIn'||S.ph==='close')&&r.doorGone){next(r===rd?'wheel':'climb');return;}
     if(S.ph==='reachIn'){const sL=seatL(v,r);S.pos.copy(sL);const u=Math.min(1,S.t/0.28);
       seatedPose(g,v,r,0,ezs(u));bodyAt(it,v,S.pos,0);armTo(g,hand,pW,ezs(u),ARM);
@@ -19850,9 +19892,23 @@ function carSeqStep(dt){const S=ME.seq,it=ME.it,g=it.g,v=S.v,r=S.r,rd=S.rd||r;S.
       S.w=f<0.45?1:Math.max(0,1-(f-0.45)/0.22);armTo(g,hand,pW,S.w,ARM);
       if(f>0.82||S.t>1.1){const hO=handleOpenL(v,r),hg=toL(v,r.door.pivot.getWorldPosition(V3()));hg.y=0;const dd=V3().subVectors(hO,hg).normalize();
         S.out=hO.clone().addScaledVector(dd,0.42).add(new THREE.Vector3(-0.12,0,0));S.face=faceTo({pos:S.out},hO);next('rise');}return;}
-    if(S.ph==='rise'){const u=Math.min(1,S.t/0.85),sL=seatL(v,r);S.pos.copy(bez(sL,S.door,S.out,ezs(u)));
-      S.pos.y=lerp(sL.y,0,ezs(u/0.6));S.rot=wrapA(S.face)*ezs((u-0.3)/0.7);
-      seatedPose(g,v,r,ezs(u/0.7));bodyAt(it,v,S.pos,S.rot);if(u>=1){if(r.doorGone||KEYS.ShiftLeft||KEYS.ShiftRight)finishOut(false);else next('grab');}return;}
+    // legs round and out of the door, feet down on the ground
+    if(S.ph==='rise'){const sL=seatL(v,r),u=Math.min(1,S.t/0.78),e=ezs(u),arc=Math.sin(Math.PI*u),ro=-r.sg*Math.PI/2+r.sg*0.25,N=g.userData.npc,fit=r.seat.obj.userData.seatFit;
+      const E=new THREE.Vector3(sL.x+0.02,sL.y,sL.z+r.sg*0.13);S.pos.copy(sL).lerp(E,e);S.rot=ro*e;
+      const b=seatPose('drive',ME.t,N.recipe,fit),a=sideSitPose(S.pos.y+0.95,0.46,0.8*e,0,arc*0.2);N.seatFit=fit;
+      const p=lerpP(b,a,e);p.hp[0]+=arc*0.45;p.hp[1]+=arc*0.55;p.kn[0]-=arc*0.5;p.kn[1]-=arc*0.6;apply(N,p);bodyAt(it,v,S.pos,S.rot);
+      if(u>=1){const f=new THREE.Vector3(Math.cos(S.rot),0,-Math.sin(S.rot));S.feet=new THREE.Vector3(E.x,0,E.z).addScaledVector(f,0.46);S.eP=E.clone();next('standUp');}return;}
+    // weight forward over the feet and up, a hand pushing on the frame, the head coming up clear of the roof
+    if(S.ph==='standUp'){const u=Math.min(1,S.t/0.82),f=new THREE.Vector3(Math.cos(S.rot),0,-Math.sin(S.rot)),top=S.feet.clone().addScaledVector(f,-0.06);
+      S.pos.set(lerp(S.eP.x,top.x,ezs(u*1.15)),lerp(S.eP.y,0,ezs((u-0.12)/0.88)),lerp(S.eP.z,top.z,ezs(u*1.15)));
+      const ff=Math.max(0,V3().subVectors(S.feet,S.pos).setY(0).dot(f)),lean=0.36*Math.sin(Math.PI*Math.min(1,u*1.05)),duck=0.8*(1-ezs((u-0.3)/0.6));
+      apply(g.userData.npc,sideSitPose(S.pos.y+0.95,ff,duck,lean,0));bodyAt(it,v,S.pos,S.rot);
+      armTo(g,hand,frameW(v,r),Math.sin(Math.PI*Math.min(1,u*1.1))*0.9);
+      if(u>=1){S.lp=null;next('stepAway');}return;}
+    // a step away from the car, turning to the door
+    if(S.ph==='stepAway'){const u=Math.min(1,S.t/0.6),to=S.out||S.pos;S.pos.copy(S.from).lerp(to,ezs(u));S.pos.y=0;S.rot=S.rot0+wrapA((S.face!=null?S.face:S.rot0)-S.rot0)*ezs(u);
+      seqLegs(g,S,dt);bodyAt(it,v,S.pos,S.rot);
+      if(u>=1){if(r.doorGone||KEYS.ShiftLeft||KEYS.ShiftRight)finishOut(false);else next('grab');}return;}
     if((S.ph==='grab'||S.ph==='shut')&&r.doorGone){finishOut(false);return;}
     // running off: the door is left as it is, open (pulled back open if the hand had started to shut it)
     if((S.ph==='grab'||S.ph==='shut')&&(KEYS.ShiftLeft||KEYS.ShiftRight)){const d=r.door;if(!d.gone){d.target=1;d.closing=false;d.vel=0;}finishOut(false);return;}
@@ -24955,6 +25011,9 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Getting in a car for real: you walk up to the door (actual steps, no gliding), take the handle and pull it open as you step back out of its way, step into the gap and turn your back to the seat, lower yourself onto its edge with your head ducked and a hand on the door frame, then swing round and lift your legs in, and pull the door shut',
+    'Getting out the same way in reverse: door pushed open, legs swung out and feet down on the ground, weight forward and up with a hand on the frame, a step away, then you shut the door (or leave it open if you run)',
+    'Stealing a parked car: you try the handle first (a pull, another, it won\'t give, a glance at the window) before the elbow goes through the glass; carjackings start from a proper approach and step into the door',
     'People overhaul: every person is now one continuous skinned body with real proportions and builds (slim, average, athletic, heavy; heights vary), sculpted faces (brow, eye sockets, nose, cheekbones, lips, jaw, chin, ears) and eyes that blink and look around',
     'Hair you can see strands in: fades, crops, side parts, quiffs, curls, afros, braids, locs, buns, ponytails that swing, long hair that falls over the shoulders; beards, moustaches and stubble',
     'Real clothes in layers: tees, polos, shirts with collars and buttons, guayaberas, Hawaiian shirts, hoodies with drawstrings, blazers and jackets, jeans with pockets, shorts, skirts, dresses; fabrics with weaves, prints and folds; sneakers, runners, dress shoes, sandals, boots, heels; caps, hats, sunglasses, watches, chains, bags and backpacks',
