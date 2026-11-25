@@ -1,36 +1,36 @@
 {
- "version": "2026.11.24.2147",
- "file": "bayshore-game.html",
- "sha256": "cd712625ceb1d1cc90f1260da7133f9369a12a05c35e2fbee93617aad4a2fd50",
- "assets": [
-  {
-   "path": "sounds/crownvic.wav",
-   "sha256": "5f7a357c9b075dd221ca8d7144505826d1a1ae3b1fe1313ca6fd95d0b5f6b8de"
-  },
-  {
-   "path": "sounds/crownvicdual.wav",
-   "sha256": "fc0abbd3531c4b8ab2d08d1e12572feb3f4a11123deae9aac5ac17aab7d413c6"
-  },
-  {
-   "path": "sounds/index.json",
-   "sha256": "ed75a52f6cf1a8cbd0d40f7298e93eeaef9779d8d8fe7b8d07595352062467a6"
-  },
-  {
-   "path": "sounds/pentastar.wav",
-   "sha256": "01ea11dc1a91be6322e0d9b2ef4b8cac6c43a06d4f7f8bbfcdcce530b176251a"
+  "version": "2026.11.25.0124",
+  "file": "bayshore-game.html",
+  "sha256": "6881f3afe669901e2601ba28ea7bd6d0542958930684ed1aa9021cd29363eaaf",
+  "assets": [
+    {
+      "path": "sounds/crownvic.wav",
+      "sha256": "5f7a357c9b075dd221ca8d7144505826d1a1ae3b1fe1313ca6fd95d0b5f6b8de"
+    },
+    {
+      "path": "sounds/crownvicdual.wav",
+      "sha256": "fc0abbd3531c4b8ab2d08d1e12572feb3f4a11123deae9aac5ac17aab7d413c6"
+    },
+    {
+      "path": "sounds/index.json",
+      "sha256": "ed75a52f6cf1a8cbd0d40f7298e93eeaef9779d8d8fe7b8d07595352062467a6"
+    },
+    {
+      "path": "sounds/pentastar.wav",
+      "sha256": "01ea11dc1a91be6322e0d9b2ef4b8cac6c43a06d4f7f8bbfcdcce530b176251a"
+    }
+  ],
+  "launcher": {
+    "version": "1.4.0",
+    "files": [
+      {
+        "path": "launcher/app.js",
+        "sha256": "6b54fecec19c1874dd09c3bf42d5d7e481bb1b61e0f9d2a4634732e467499267"
+      },
+      {
+        "path": "launcher/preload.js",
+        "sha256": "a50c75db5a0a9bbdd095ac24c5cfd254fd306611b6473e40f6045109af72ff58"
+      }
+    ]
   }
- ],
- "launcher": {
-  "version": "1.4.0",
-  "files": [
-   {
-    "path": "launcher/app.js",
-    "sha256": "6b54fecec19c1874dd09c3bf42d5d7e481bb1b61e0f9d2a4634732e467499267"
-   },
-   {
-    "path": "launcher/preload.js",
-    "sha256": "a50c75db5a0a9bbdd095ac24c5cfd254fd306611b6473e40f6045109af72ff58"
-   }
-  ]
- }
 }
