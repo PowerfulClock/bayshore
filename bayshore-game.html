@@ -14533,8 +14533,11 @@ npcPose = function (root, t, gait, dt) {
   // while the chest and head stay on target; going backwards runs the step cycle backwards (a backpedal)
   let dA = 0, bk = 0;
   if (node && spd > 0.35 && st.vx != null) { const c = Math.cos(yaw), s = Math.sin(yaw), fw = st.vx * c - st.vz * s, lt = -st.vx * s - st.vz * c, a = Math.atan2(lt, fw);
-    if (Math.abs(a) > 1.95) { bk = 1; dA = _wr(a - Math.PI); } else dA = a; dA = _cl(dA, -1.15, 1.15) * (va > 1 ? 0.75 : 1); }
-  const kD = Math.min(1, dtp * 7); st.dA = (st.dA || 0) + (dA - (st.dA || 0)) * kD; st.bk = (st.bk || 0) + (bk - (st.bk || 0)) * kD;
+    if (Math.abs(a) > 1.95) { bk = 1; dA = _wr(a - Math.PI); } else dA = a;
+    // only a real side-step turns the hips: the small drift of someone running or walking at a target (corrections,
+    // turning, being pushed round things) is ignored, or a runner's body swings from side to side
+    const dz = va > 1 ? 0.9 : 0.55, m = Math.abs(dA); dA = m < dz ? 0 : Math.sign(dA) * Math.min(1.15, (m - dz) * 1.6) * (va > 1 ? 0.75 : 1); }
+  const kD = Math.min(1, dtp * 4); st.dA = (st.dA || 0) + (dA - (st.dA || 0)) * kD; st.bk = (st.bk || 0) + (bk - (st.bk || 0)) * kD;
   st.ph += dtp * 2 * Math.PI * f * Math.max(0.35, Math.min(1, va * 1.5 + turnK * 0.6)) * (st.bk > 0.5 ? -0.85 : 1);
   const style = R.walk || (R.sex === 'f' ? 'fem' : 'normal');
   const m0 = st.mv, mv = { f: m0 ? m0.f : 1, s: m0 ? m0.s : 0, c: m0 ? m0.c || 0 : 0, sp: _c01(v - 2) };
@@ -25174,6 +25177,7 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Fixed: officers (and anyone running) no longer swing their body from side to side while chasing; only a real side-step turns the hips',
     'Police on foot stay near their car: chasing a runner, they go only so far (about 35 m) before running back to the car together and coming after you in it',
     'Police gunfights move naturally: officers hold their cover instead of hopping from end to end of the car, run to cover that is far and back or side-step to near cover with the gun up, flankers move to a spot then hold it and shoot; anyone stepping sideways or backwards now turns their hips into the step or backpedals, instead of sliding',
     'Performance overhaul: the same world in about 40% fewer draw calls (around 2,200 down to 1,200-1,400 a frame downtown, shadows included), with nothing taken out and nothing drawn worse',
