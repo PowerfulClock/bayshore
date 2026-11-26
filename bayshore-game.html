@@ -16475,6 +16475,7 @@ function cityBuilding(b, B, RB, DB, fac) {
   else if (a === 'glass') { wallHex = 0x8a96a0; wm = 1; }
   else if (a === 'ind' || a === 'store') { wallHex = METAL_C[sid % 5]; wm = 3; }
   else if (b.c === 'glass') wallHex = 0xbfc4c6;
+  b._wm = wm; b._a = a;   // the wall's material, for bullet impacts
   const trimHex = a === 'deco' ? 0xf4f2ec : r() < 0.5 ? 0xe9e4d8 : shadeHexN(wallHex, 0.86);
   const wc = col(wallHex), trim = col(trimHex);
   const special = b.bpd || b.gunshopRear || b.toolRear;
@@ -21114,9 +21115,10 @@ function ragStep(dt){const cars=RAGS.length?ragCars():null;
     else if(R.mode==='lie'){if(R.t>(R.lieFor||1.1)){// up again: heading the way the head lay
         const p=R.p,hx=p[RG.H].x-p[RG.P].x,hz=p[RG.H].z-p[RG.P].z;R.psi=Math.hypot(hx,hz)>0.1?Math.atan2(-hz,hx):0;
         R.gx=p[RG.P].x;R.gz=p[RG.P].z;R.gy=groundAt(R.gx,R.gz,p[RG.P].y+0.5).y;
-        R.bones=RAG_BONES(R.N);R.q0=R.bones.map(b=>b.quaternion.clone());R.gq0=R.g.quaternion.clone();R.gp0=R.g.position.clone();R.mode='up';R.t=0;}}
-    else if(R.mode==='up'){const u=Math.min(1,R.t/1.1),N=R.N,g=R.g;
-      apply(N,getupPose(u));const qt=R.bones.map(b=>b.quaternion.clone());const e=ezs(Math.min(1,u*1.6));R.bones.forEach((b,i)=>b.quaternion.copy(R.q0[i]).slerp(qt[i],e));
+        R.bones=RAG_BONES(R.N);R.q0=R.bones.map(b=>b.quaternion.clone());R.gq0=R.g.quaternion.clone();R.gp0=R.g.position.clone();R.mode='up';R.t=0;R.upT=1.6;}
+      else if(R.incap)ragWrithe(R,dt);}
+    else if(R.mode==='up'){const u=Math.min(1,R.t/(R.upT||1.1)),N=R.N,g=R.g;
+      apply(N,getupPose2(u,N));const qt=R.bones.map(b=>b.quaternion.clone());const e=ezs(Math.min(1,u*1.6));R.bones.forEach((b,i)=>b.quaternion.copy(R.q0[i]).slerp(qt[i],e));
       const qUp=new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0,1,0),R.psi);g.quaternion.copy(R.gq0).slerp(qUp,ezs(Math.min(1,u*1.4)));
       g.position.copy(R.gp0).lerp(new THREE.Vector3(R.gx,R.gy,R.gz),ezs(Math.min(1,u*1.4)));
       if(u>=1){const i=RAGS.indexOf(R);if(i>=0)RAGS.splice(i,1);g.quaternion.identity();g.position.set(0,0,0);if(R.onRest)R.onRest(R);}}}}
@@ -21270,7 +21272,8 @@ function pedStep(dt){window.P_PEDS=PEDS;if(!ME.it||!liveMode())return;const P=ME
   for(const G of PEDG){if(G.kind!=='talk')continue;G.sT-=dt;if(G.sT<=0){G.sT=2+Math.random()*4;G.speaker=Math.floor(Math.random()*G.members.length);}}
   for(const p of PEDS.slice()){p.t+=dt;const g=p.g;if(p.reactT>0)p.reactT-=dt;
     if(p.mode==='rag'){if(p.rag&&p.rag.p)p.x=p.rag.p[0].x,p.z=p.rag.p[0].z;continue;}
-    if(p.cop||p.mode==='call'){wPedStep(p,dt);continue;}   // officers on foot, people phoning the police (wanted.js)
+    if(hrActive(p)){hrStep(p,dt);continue;}   // reacting to a hit: their own behaviour waits
+    if(p.cop||p.mode==='call'){wPedStep(p,dt);hrAfter(p,dt);continue;}   // officers on foot, people phoning the police (wanted.js)
     const d=Math.hypot(p.x-P.x,p.z-P.z);
     // too far to see moving: skip the animation (still moving them)
     const far=camera.position.distanceTo(p.node.position)>110;
@@ -21324,6 +21327,7 @@ function pedStep(dt){window.P_PEDS=PEDS;if(!ME.it||!liveMode())return;const P=ME
         g.updateMatrixWorld(true);armTo(g,'R',g.localToWorld(new THREE.Vector3(0.3,1.12,-0.04)),0.95,new THREE.Vector3(-0.3,-1,-0.6));armTo(g,'L',g.localToWorld(new THREE.Vector3(0.3,1.1,0.03)),0.6,new THREE.Vector3(-0.3,-1,0.6));J.head.rotation.z-=0.35;}}
     else if(p.mode==='walk'&&p.grp&&p.grp.kind==='pair'){// walking together: they look over to each other now and then
       const o=p.grp.members.find(m=>m!==p);if(o&&Math.sin((ME.t+p.voice*3)*0.6)>0.5){const a=wrapA(Math.atan2(-(o.z-p.z),o.x-p.x)-p.psi);J.head.rotation.y+=clamp(a,-0.9,0.9)*0.7;}}
+    hrAfter(p,dt);
     // hit: the head snaps away, the body rocks back
     if(p.hurt){const k=Math.sin(Math.min(1,p.hurt.t/0.42)*Math.PI);J.head.rotation.y+=p.hurt.side*0.65*k;J.head.rotation.z+=0.35*k;J.spine.rotation.z+=0.28*k;J.chest.rotation.y-=p.hurt.side*0.25*k;}}}
 // you, punching or being punched: the arms, and a flinch
@@ -21926,7 +21930,7 @@ function aimHold(slot,dir){const N=ME.it.g.userData.npc,J=N.joints;const head=J.
   if(slot==='long'){G=sh.clone().addScaledVector(right,-0.05).addScaledVector(up,0.0).addScaledVector(dir,0.27);}
   else{G=head.clone().addScaledVector(up,-0.03).addScaledVector(right,0.03).addScaledVector(dir,0.47);}
   // recoil: the muzzle flips up and the gun comes back
-  const r=WP.recoil;if(r>0){Q.multiply(qz(r*(slot==='long'?0.6:1.4)));G.addScaledVector(dir,-r*(slot==='long'?0.5:0.35)).addScaledVector(up,r*0.05);}
+  wpHoldFeel(slot,dir,G,Q,up,right);
   return {G,Q};}
 function slotWorld(slot,lift){const s=wpSlot(slot);s.updateMatrixWorld(true);const G=s.getWorldPosition(_V()),Q=s.getWorldQuaternion(new THREE.Quaternion());
   if(lift){const upv=new THREE.Vector3(-1,0,0).applyQuaternion(Q);G.addScaledVector(upv,lift);}return {G,Q};}
@@ -22000,13 +22004,13 @@ function sndWheel(tick){if(!sndOK())return;const t=DAC.currentTime;if(tick)burst
 --------------------------------------------------------------------------- */
 function wpAiming(){return !!(WP.eq&&!WP.seq&&!ME.car&&!ME.rag&&!ME.dead&&(WP.aimK>0.2||WP.fireT<0.9));}
 function wpStep(dt){if(!ME.it)return;const it=ME.it;
-  WP.clock=(WP.clock||0)+dt;WP.fireT+=dt;WP.recoil*=Math.exp(-dt*(WP.eq==='long'?14:11));WP.bloom=Math.max(0,WP.bloom-dt*(WP.eq==='long'?0.042:0.055));WP.heat=Math.max(0,(WP.heat||0)-dt*2.6);
+  WP.clock=(WP.clock||0)+dt;WP.fireT+=dt;WP.recoil*=Math.exp(-dt*whOf(wpCur()).visRate);wpRecoilStep(dt);WP.bloom=Math.max(0,WP.bloom-dt*(WP.eq==='long'?0.042:0.055));WP.heat=Math.max(0,(WP.heat||0)-dt*2.6);
   // the sights are never dead still: breathing, more out of breath or hurt, and they settle a moment after they come up
   if(WP.eq&&WP.aimK>0.5&&!WP.dby&&!ME.car&&!ME.dead&&MODE==='play'){const k=0.0011*(1+(1-(typeof STAM!=='undefined'?STAM.v:1))*3.2+(PLAYER.hp<55?1.3:0)+(WP.aimK<0.97?2:0)),t=WP.clock;
     ME.yaw+=(Math.sin(t*1.7)*0.9+Math.sin(t*3.9+1.3)*0.5)*k*dt*2.4;ME.pitch=clamp(ME.pitch+(Math.cos(t*1.3+0.6)*0.9+Math.sin(t*4.4)*0.4)*k*dt*2.4,-0.55,1.25);}
   // aiming (on foot): right mouse
   const canAim=WP.eq&&!WP.seq&&!ME.car&&!ME.rag&&!ME.dead&&!UI.open&&!PHONE.open;
-  WP.aimK+=((canAim&&MOUSE.r?1:0)-WP.aimK)*Math.min(1,dt*9);
+  {const up=canAim&&MOUSE.r;WP.aimK+=((up?1:0)-WP.aimK)*Math.min(1,dt*(up?whOf(wpCur()).aimIn:10));}
   // drive-by: in the driver's seat with a handgun, right mouse
   const canDby=ME.car&&DRIVE&&!ME.seq&&SAVE.hand&&WP.obj.hand&&!ME.dead&&!UI.open&&!PHONE.open;
   if(canDby&&MOUSE.r&&!WP.dby){WP.dby=true;WP.eq='hand';wpAttach('hand',true);const f=camera.getWorldDirection(_V());WP.dYaw=Math.atan2(-f.z,f.x);WP.dPitch=0.02;WP.raise=0;sndDraw('hand','draw');camBlend(0.35);}
@@ -22067,7 +22071,7 @@ function wpFire(){const id=wpCur(),W=WPN[id],o=wpObj(WP.eq);if(!o)return;
   WP.bloom=Math.min(W.rifle?0.075:0.09,WP.bloom+W.bloom);WP.recoil+=W.kick;WP.heat=Math.min(6,(WP.heat||0)+1);
   // the camera kicks (up and a little sideways); the AK climbs on full auto
   // (each shot fired on top of the last climbs more; it wanders sideways too, and the AK pulls up and to the right on auto)
-  const kc=W.kickCam*(WP.aimK>0.5?0.85:1.15)*(WP.dby?0.6:1)*(1+Math.min(W.rifle?0.7:0.8,Math.max(0,(WP.heat||0)-1)*0.2));if(WP.dby)WP.dPitch=clamp(WP.dPitch+kc*0.9,-0.6,0.8);else{ME.pitch=clamp(ME.pitch-kc,-0.55,1.25);ME.yaw+=(Math.random()-0.5)*kc*1.3-(W.rifle&&(WP.heat||0)>2?kc*0.22:0);}
+  const kc=W.kickCam*(WP.aimK>0.5?0.85:1.15)*(WP.dby?0.6:1)*(1+Math.min(W.rifle?0.7:0.8,Math.max(0,(WP.heat||0)-1)*0.2));if(WP.dby)WP.dPitch=clamp(WP.dPitch+kc*0.9,-0.6,0.8);else wpCamKick(W,kc);
   CAMSHAKE.k=Math.min(1,CAMSHAKE.k+(W.rifle?0.5:0.35));
   // the slide and the case
   slideSet(id,1);fxCasing(o,W);WP.smokeT=Math.min(3,WP.smokeT+(W.rifle?0.35:0.5));
@@ -22187,18 +22191,293 @@ function traceAll(O,D,far,o){o=o||{};const st=traceStatic(O,D,far);let hit=st||{
 /* ---------------------------------------------------------------------------
    Hits
 --------------------------------------------------------------------------- */
+/* ===========================================================================
+   Gunplay: each gun handles like itself
+   - recoil climbs over a few hundredths of a second (not a snap), then most of it settles back once you stop firing;
+     how much it climbs, kicks sideways, drifts (the AK pulls right on a long burst) and settles is the gun's own
+   - the gun in the hands: muzzle flip, push back and a little roll per shot by gun; it sways with breathing (more
+     when hurt) and bobs with your steps while aimed; heavier guns come up to the eye more slowly
+   - the flash and its light vary shot to shot; each gun's report has its own pitch and length, and no two are alike
+=========================================================================== */
+const WH={
+  c10: {climb:1.0, side:0.55,drift:0,  settle:0.7, settleT:0.13,flip:1.5, back:0.32,roll:0.55,visRate:12,  sway:0.9, aimIn:11, bob:0.9, flash:0.95,flashL:3.0,
+        snd:{crack:2750,body:1000,boom:172,len:1.0, det:0.045,mech:3200}},
+  m92: {climb:0.9, side:0.4, drift:0,  settle:0.75,settleT:0.15,flip:1.2, back:0.4, roll:0.35,visRate:10.5,sway:0.8, aimIn:9.5,bob:1.0, flash:1.05,flashL:3.4,
+        snd:{crack:2400,body:860, boom:148,len:1.14,det:0.04, mech:2750}},
+  ak47:{climb:0.8, side:0.6, drift:0.3,settle:0.5, settleT:0.2, flip:0.65,back:0.6, roll:0.25,visRate:13,  sway:1.3, aimIn:7,  bob:1.25,flash:1.15,flashL:5.2,
+        snd:{crack:3200,body:700, boom:120,len:1.0, det:0.035,mech:1900}}};
+const whOf=id=>WH[id]||WH.c10;
+const REC={vp:0,vy:0,pend:0,lastT:-9,roll:0},REC_TAU=0.045;
+// a shot's kick on the view: a velocity that dies away over ~0.05 s, so the climb is quick but not a jump
+function wpCamKick(W,kc){const H=whOf(W.id),heat=WP.heat||0;
+  REC.vp+=kc*H.climb*(0.9+Math.random()*0.2)/REC_TAU;
+  REC.vy+=((Math.random()-0.5)*2*H.side*kc-(H.drift&&heat>2?H.drift*kc*Math.min(1,(heat-2)/4):0))/REC_TAU;
+  REC.pend=Math.min(0.3,REC.pend+kc*H.climb*H.settle);REC.lastT=WP.clock||0;REC.roll=(Math.random()-0.5)*2*H.roll;}
+function wpRecoilStep(dt){const H=whOf(wpCur());
+  if(ME.car&&!WP.dby||ME.dead){REC.vp=REC.vy=REC.pend=0;return;}
+  if(Math.abs(REC.vp)+Math.abs(REC.vy)>1e-6){const d=1-Math.exp(-dt/REC_TAU);ME.pitch=clamp(ME.pitch-REC.vp*REC_TAU*d,-0.55,1.25);ME.yaw+=REC.vy*REC_TAU*d;REC.vp*=1-d;REC.vy*=1-d;}
+  // settling back: once the trigger's been still a moment, most of the climb comes back down (you can fight it with the mouse)
+  if(REC.pend>1e-5&&(WP.clock||0)-REC.lastT>H.settleT){const r=REC.pend*(1-Math.exp(-dt*7.5));ME.pitch=clamp(ME.pitch+r,-0.55,1.25);REC.pend-=r;}}
+// the aimed hold, its recoil, its sway and its bob (the gun only: where the bullet goes is the crosshair)
+const _qx=new THREE.Quaternion(),_ax=new THREE.Vector3(1,0,0);
+function wpHoldFeel(slot,dir,G,Q,up,right){const H=whOf(SAVE[slot]),r=WP.recoil;
+  if(r>0){Q.multiply(qz(r*H.flip));Q.multiply(_qx.setFromAxisAngle(_ax,r*REC.roll));G.addScaledVector(dir,-r*H.back).addScaledVector(up,r*0.05);}
+  const t=WP.clock||0,mv=Math.min(1,Math.hypot(PED.u||0,PED.v||0)/1.6),hurt=PLAYER.hp<55?1.6:1,sw=H.sway*(1-mv*0.4)*hurt;
+  G.addScaledVector(right,Math.sin(t*1.1)*0.0024*sw).addScaledVector(up,Math.sin(t*1.7+1)*0.0019*sw);
+  if(mv>0.05&&ME.it){const ph=npcState(ME.it.g).ph||0,b=mv*H.bob;G.addScaledVector(up,(0.5-Math.abs(Math.sin(ph)))*0.014*b).addScaledVector(right,Math.sin(ph)*0.007*b);Q.multiply(qz(Math.sin(ph*2)*0.012*b));}}
+
+/* ===========================================================================
+   Bullet impacts by what was hit
+   concrete, stucco and stone, brick, asphalt, metal, wood, glass (glass-walled towers), dirt, grass, gravel, sand,
+   water: each its own dust colour and amount, chips or splinters or a spray of sand, sparks only off metal (and the
+   odd one off concrete and asphalt, thrown along the ricochet), its own mark and its own sound. Marks sit on the
+   surface they hit (on the ground they follow its slope), come from a reused pool and fade away after a couple of
+   minutes; a shot into water leaves a splash and a ring that spreads and fades.
+=========================================================================== */
+const IMP={
+  concrete:{dust:0xc9c2b4,bit:0xb8b0a2,puffs:4,op:0.55,size:0.11,bits:10,spark:0.1, decal:'concrete',snd:'concrete',rico:0.16},
+  stone:   {dust:0xdcd5c4,bit:0xcfc7b3,puffs:4,op:0.55,size:0.11,bits:11,spark:0.1, decal:'stone',   snd:'stone',   rico:0.14},
+  brick:   {dust:0xb07a64,bit:0x8e4632,puffs:4,op:0.6, size:0.11,bits:13,spark:0,   decal:'brick',   snd:'brick',   rico:0.04},
+  asphalt: {dust:0x77736c,bit:0x3a3836,puffs:3,op:0.45,size:0.09,bits:8, spark:0.18,decal:'asphalt', snd:'asphalt', rico:0.15},
+  metal:   {dust:0x9a9a9a,bit:0x777777,puffs:2,op:0.2, size:0.08,bits:3, spark:1,   decal:'metal',   snd:'metal',   rico:0.3},
+  wood:    {dust:0xc0a078,bit:0x6b4a26,puffs:3,op:0.5, size:0.1, bits:14,spark:0,   decal:'wood',    snd:'wood'},
+  dirt:    {dust:0x8a7656,bit:0x5e4a32,puffs:5,op:0.62,size:0.15,bits:14,spark:0,   decal:'dirt',ds:1.4,snd:'dirt',rise:0.5},
+  grass:   {dust:0x7d6c4e,bit:0x52702c,puffs:3,op:0.42,size:0.12,bits:12,spark:0,   decal:'dirt',ds:1.1,dop:0.65,snd:'grass'},
+  gravel:  {dust:0x9a9080,bit:0x7d7468,puffs:4,op:0.5, size:0.12,bits:15,spark:0.06,decal:'dirt',dop:0.8,snd:'gravel'},
+  sand:    {dust:0xe2d2a8,bit:0xd8c290,puffs:4,op:0.6, size:0.15,bits:24,spark:0,   decal:'sand',ds:1.3,dop:0.55,snd:'sand',fountain:true}};
+function terrNormal(x,z){const e=0.6,nx=heightAt(x-e,z)-heightAt(x+e,z),nz=heightAt(x,z-e)-heightAt(x,z+e);return new THREE.Vector3(nx,2*e,nz).normalize();}
+function surfOf(h){const P=h.point;
+  switch(h.kind){
+    case 'ground':{const k=h.g;if(k==='road'||k==='deck'||k==='lot')return 'asphalt';if(k==='walk'||k==='island'||k==='plaza')return 'concrete';
+      const m=matAt(P.x,P.z);return m===1?'sand':m===9?'stone':(m===6||m===7)?'gravel':(m===2||m===3)?'dirt':'grass';}
+    case 'water':return 'water';
+    case 'tree':case 'wood':return 'wood';
+    case 'post':case 'metalbox':return 'metal';
+    case 'wall':return h.w&&h.w.y1<20&&!h.w.shop?'metal':'concrete';
+    case 'building':{if(h.ceil||!h.b||h.b.bi==null||h.b.bi<0)return 'concrete';const B=WD.buildings[h.b.bi];if(!B)return 'concrete';
+      if(h.normal&&h.normal.y>0.7)return 'concrete';   // a roof
+      if(B._a==='glass'&&P.y>(B.t[0].y0||0)+4.2)return 'glass';
+      return B._wm===2?'brick':B._wm===3?'metal':B._wm===4?'stone':'concrete';}}
+  return 'concrete';}
+// the effect of one hit on a surface (D: the bullet's direction)
+function fxImpactM(P,N,mat,big,D){if(!FX.ok)return;const I=IMP[mat]||IMP.concrete;big=big||1;
+  const R=D?D.clone().addScaledVector(N,-2*D.dot(N)).normalize():N;   // the way a ricochet goes
+  for(let i=0;i<I.puffs;i++)fxSprite(FX.tex.smoke,P.clone().addScaledVector(N,0.04),N.clone().multiplyScalar(0.35+Math.random()*0.8).addScaledVector(R,0.25).add(_V().set((Math.random()-0.5)*0.4,0.08+Math.random()*0.25+(I.rise||0),(Math.random()-0.5)*0.4)),
+    I.size*(0.85+Math.random()*0.4)*big,0.9+Math.random()*0.9,I.op*(0.85+Math.random()*0.3),I.dust,false,3.2,0.1+(I.rise||0)*0.2);
+  const nb=Math.round(I.bits*big*(0.8+Math.random()*0.4));
+  for(let i=0;i<nb;i++){const v=I.fountain?N.clone().multiplyScalar(1.5+Math.random()*2.2).add(_V().set(Math.random()-0.5,Math.random()*0.6,Math.random()-0.5).multiplyScalar(1.4))
+      :N.clone().multiplyScalar(1+Math.random()*3).addScaledVector(R,Math.random()*1.2).add(_V().set(Math.random()-0.5,Math.random()*0.8,Math.random()-0.5).multiplyScalar(2.2));
+    fxPt(FX.bits,P.clone().addScaledVector(N,0.02),v,0.5+Math.random()*0.6,Math.random()<0.5?I.bit:I.dust);}
+  if(I.spark&&Math.random()<I.spark){const ns=mat==='metal'?10+((Math.random()*8)|0):3+((Math.random()*3)|0);
+    for(let i=0;i<ns;i++){const r=_V().set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).multiplyScalar(1.4);
+      fxPt(FX.pts,P.clone().addScaledVector(N,0.01),R.clone().multiplyScalar(0.8).add(N.clone().multiplyScalar(0.4)).add(r).normalize().multiplyScalar(2.5+Math.random()*5.5),0.12+Math.random()*0.25,Math.random()<0.5?0xffd890:0xffa040,6);}}}
+// the sound of a bullet into each surface, a little different every time
+function sndImpactM(mat,P){const V=voiceAt(P,0.5*(0.85+Math.random()*0.3));if(!V)return;const t=V.t,m=0.92+Math.random()*0.16;
+  switch(mat){
+    case 'brick':gnz(V,t,0.02,'bandpass',1900*m,1.4,0.95);gtone(V,t,130*m,60,0.07,0.5);gnz(V,t+0.004,0.06,'bandpass',900*m,1,0.35);for(let i=0;i<4;i++)gnz(V,t+0.1+Math.random()*0.35,0.012,'bandpass',3000+Math.random()*2000,3,0.05);return;
+    case 'stone':gnz(V,t,0.016,'bandpass',3200*m,1.6,1.0);gtone(V,t,170*m,80,0.05,0.4);gnz(V,t+0.005,0.04,'highpass',5000*m,0.7,0.25);for(let i=0;i<4;i++)gnz(V,t+0.1+Math.random()*0.4,0.01,'bandpass',4500+Math.random()*3000,3,0.05);return;
+    case 'asphalt':gnz(V,t,0.02,'bandpass',2300*m,1.3,0.85);gtone(V,t,120*m,55,0.07,0.45);gnz(V,t+0.004,0.05,'lowpass',1400*m,0.8,0.3);return;
+    case 'sand':gnz(V,t,0.09,'lowpass',900*m,0.6,0.7,0.004);gnz(V,t+0.01,0.25,'bandpass',3800*m,0.8,0.12,0.02);gtone(V,t,80*m,40,0.07,0.3);return;
+    case 'grass':gnz(V,t,0.06,'lowpass',650*m,0.7,0.8);gnz(V,t+0.005,0.08,'bandpass',2400*m,0.8,0.12);gtone(V,t,85*m,42,0.07,0.35);return;
+    case 'gravel':gnz(V,t,0.04,'lowpass',900*m,0.7,0.8);gtone(V,t,95*m,45,0.06,0.35);for(let i=0;i<7;i++)gnz(V,t+0.02+Math.random()*0.3,0.01,'bandpass',2500+Math.random()*2500,3,0.08);return;
+    case 'dirt':gnz(V,t,0.07,'lowpass',500*m,0.7,0.9);gtone(V,t,90*m,45,0.08,0.4);return;
+    case 'metal':gnz(V,t,0.02,'bandpass',3500*m,2,0.8);{const f=(2000+Math.random()*1100)*m;gtone(V,t,f,f*0.97,0.35,0.25,'triangle');gtone(V,t,f*1.52,f*1.5,0.22,0.12,'triangle');}gtone(V,t,180*m,90,0.08,0.4);return;
+    case 'wood':gnz(V,t,0.05,'bandpass',750*m,2,0.9);gtone(V,t,320*m,180,0.06,0.4);gnz(V,t+0.01,0.08,'bandpass',2600*m,1,0.2);return;}
+  // concrete and stucco: a hard tick and the chips pattering down
+  gnz(V,t,0.018,'bandpass',2800*m,1.5,1.0);gtone(V,t,150*m,70,0.06,0.45);gnz(V,t+0.005,0.05,'highpass',4500*m,0.7,0.25);
+  for(let i=0;i<5;i++)gnz(V,t+0.12+Math.random()*0.4,0.012,'bandpass',4000+Math.random()*3000,3,0.06);}
+// a hit on the world (not people, not cars)
+function impactWorld(h,D,W){const P=h.point;let N=h.normal||D.clone().negate();const big=W.rifle?1.4:1,mat=surfOf(h);
+  if(mat==='water'){const S=new THREE.Vector3(P.x,WATER_Y,P.z);fxSplash(S);for(let i=0;i<8;i++)fxPt(FX.bits,S,_V().set((Math.random()-0.5)*0.4,3.5+Math.random()*2.5,(Math.random()-0.5)*0.4),0.8,0xeef6f8);
+    holeOn(null,S.clone().setY(WATER_Y+0.01),UPV,0.12,'ring',{anim:'ring',op:0.7,lift:0});sndImpact('water',P);return;}
+  if(h.kind==='ground'&&h.g==='ground')N=terrNormal(P.x,P.z);
+  if(mat==='glass'){fxGlassPuff(P,D);holeOn(null,P,N,0.18+Math.random()*0.1,'glass',{life:150,op:0.85});return;}
+  const I=IMP[mat];fxImpactM(P,N,mat,big,D);
+  if(I.decal)holeOn(null,P,N,(W.rifle?0.06:0.045)*(I.ds||1)*(0.85+Math.random()*0.3),I.decal,{life:120,op:I.dop||1,lift:h.kind==='ground'?0.012:0.004});
+  sndImpactM(I.snd,P);if(I.rico&&Math.random()<I.rico)sndRicochet(P);}
+// the marks: a pool of quads reused oldest first (no new objects per shot), the world's fading after a while
+const FX_DMAX=180;
+function holeOn(obj,P,N,size,kind,o){if(!FX.ok)return null;const tex=kind==='glass'?crackTex():FX.tex[kind];if(!tex)return null;if(!FX.dfree)FX.dfree=[];
+  let m;if(FX.decals.length>=FX_DMAX){m=FX.decals.shift();if(m.parent)m.parent.remove(m);}else m=FX.dfree.pop();
+  if(!m){if(!FX.dgeo)FX.dgeo=new THREE.PlaneGeometry(1,1);m=new THREE.Mesh(FX.dgeo,new THREE.MeshStandardMaterial({map:tex,transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-6,polygonOffsetUnits:-6,roughness:0.8}));
+    m.userData.fx=true;m.userData.decal=true;m.matrixAutoUpdate=true;}
+  const mt=m.material,op=o&&o.op!=null?o.op:1;mt.map=tex;mt.opacity=op;mt.roughness=0.8;
+  m.position.copy(P).addScaledVector(N,o&&o.lift!=null?o.lift:0.004);m.scale.setScalar(size);m.quaternion.identity();m.lookAt(P.clone().add(N));m.rotateZ(Math.random()*TAU);
+  const u=m.userData;u.t0=performance.now()/1000;u.life=o&&o.life||0;u.anim=o&&o.anim||null;u.op0=op;u.s0=size;
+  scene.add(m);if(obj)obj.attach(m);FX.decals.push(m);return m;}
+function decalAt(P,N,kind,obj,size){return holeOn(obj,P,N,size,kind);}
+function decalsStep(){const now=performance.now()/1000,L=FX.decals;
+  for(let i=L.length-1;i>=0;i--){const m=L[i],u=m.userData;
+    if(u.anim==='ring'){const a=(now-u.t0)/0.9;if(a>=1){L.splice(i,1);if(m.parent)m.parent.remove(m);FX.dfree.push(m);continue;}m.scale.setScalar(u.s0*(1+a*5));m.material.opacity=u.op0*(1-a);continue;}
+    if(u.life>0){const a=now-u.t0-u.life;if(a>0){if(a>4){L.splice(i,1);if(m.parent)m.parent.remove(m);FX.dfree.push(m);continue;}m.material.opacity=u.op0*(1-a/4);}}}}
+function fxImpactTex(){const T=FX.tex;if(T.brick)return;
+  // the flying bits drawn as round specks, not squares (sparks soft-edged)
+  T.dot=canvasTex(32,32,(x,w,h)=>{x.clearRect(0,0,w,h);x.fillStyle='#fff';x.beginPath();x.arc(16,16,13,0,TAU);x.fill();});
+  T.glow=canvasTex(32,32,(x,w,h)=>{const g=x.createRadialGradient(16,16,0,16,16,16);g.addColorStop(0,'rgba(255,255,255,1)');g.addColorStop(0.4,'rgba(255,255,255,.8)');g.addColorStop(1,'rgba(255,255,255,0)');x.fillStyle=g;x.fillRect(0,0,w,h);});
+  {const m=FX.bits.p.material;m.map=T.dot;m.alphaTest=0.5;m.size=0.026;m.needsUpdate=true;}{const m=FX.pts.p.material;m.map=T.glow;m.size=0.045;m.needsUpdate=true;}
+  const hole=(rim,core,cr,soft)=>canvasTex(64,64,(x,w,h)=>{x.clearRect(0,0,w,h);const g=x.createRadialGradient(32,32,0,32,32,30);if(soft){g.addColorStop(0,core);g.addColorStop(0.35,rim);g.addColorStop(1,'rgba(0,0,0,0)');}
+      else{g.addColorStop(0,core);g.addColorStop(0.26,core);g.addColorStop(0.36,rim);g.addColorStop(1,'rgba(0,0,0,0)');}x.fillStyle=g;x.fillRect(0,0,w,h);
+    if(cr){x.strokeStyle=cr;x.lineWidth=1;for(let i=0;i<7;i++){const a=Math.random()*TAU;x.beginPath();x.moveTo(32+Math.cos(a)*9,32+Math.sin(a)*9);x.lineTo(32+Math.cos(a+0.2)*20,32+Math.sin(a+0.2)*20);x.lineTo(32+Math.cos(a-0.1)*27,32+Math.sin(a-0.1)*27);x.stroke();}}
+    if(soft){for(let i=0;i<14;i++){const a=Math.random()*TAU,r=8+Math.random()*18;x.fillStyle=core.replace(/[\d.]+\)$/,'0.35)');x.beginPath();x.arc(32+Math.cos(a)*r,32+Math.sin(a)*r,1+Math.random()*2.5,0,TAU);x.fill();}}});
+  T.brick=hole('rgba(190,120,95,.75)','rgba(40,18,12,1)','rgba(110,50,35,.6)');T.stone=hole('rgba(225,220,205,.8)','rgba(45,42,38,1)','rgba(120,115,105,.5)');
+  T.dirt=hole('rgba(70,55,38,.55)','rgba(30,22,14,.9)',null,true);T.sand=hole('rgba(150,130,95,.35)','rgba(120,100,70,.55)',null,true);
+  T.ring=canvasTex(64,64,(x,w,h)=>{x.clearRect(0,0,w,h);x.strokeStyle='rgba(255,255,255,.9)';x.lineWidth=3;x.beginPath();x.arc(32,32,26,0,TAU);x.stroke();x.strokeStyle='rgba(255,255,255,.35)';x.lineWidth=2;x.beginPath();x.arc(32,32,18,0,TAU);x.stroke();});}
+
+/* ===========================================================================
+   Hit reactions: everyone on foot (people in the street, anyone with a gun, police officers alike)
+   A shot is read for where it struck (head, chest, hips, arm, leg), which way it pushed against the way the body
+   faces, the torque it put round the body's axis, how hard (pistol or rifle), and what the body was doing: standing,
+   walking, running, crouched (in cover, cowering), already reeling, already hurt. Each person has a balance that
+   every hit takes from (more when running, hurt, hit in a leg, hit again quickly) and that comes back over a second
+   or two. Out of that:
+   - a flinch, always: the torso, the head and a hit arm give way in the direction of the hit and spring back
+     (layered over whatever they're doing, so someone aiming keeps aiming)
+   - a stagger: a few real steps in the direction of the push, turned by the torque, arms out for balance (the legs
+     step backwards or sideways as they need to); a runner lurches instead, carried on by his speed
+   - a buckle: a leg gives, they drop toward a crouch holding the wound, then come back up (and limp)
+   - a fall: balance gone, they go down with the speed they had (the ragdoll), and get up again: onto the knees,
+     pushing up, and stand, then hunched and holding the wound for a while. Badly hurt people stay down, moving
+     weakly, rather than get up
+   - a death: a collapse at the knees, a last stagger or a turn before they go, or (head, running, crouched) limp at
+     once; never thrown: a bullet doesn't throw anyone, their own momentum and gravity take them down
+   - a gun in the hand falls from it when they die (or, someone not police, when the gun arm is hit), and clatters
+     down and lies there
+   While a body is reacting its own behaviour (fleeing, fighting, an officer's whole state) is held exactly where it
+   was and carries on afterwards; nothing about it is reset. Blends in and out of a reaction take a fraction of a
+   second, so nothing snaps; the same reaction isn't picked twice running if another fits.
+=========================================================================== */
+const HRK={last:[]},GUNS_DROP=[];
+function hrState(p){return p.hr||(p.hr={bal:1,balT:ME.t,hits:0,lastT:-9,r:null,bo:null,wound:null,woundT:-99,recT:0,
+  sp:{pt:{x:0,v:0},rl:{x:0,v:0},yw:{x:0,v:0},hd:{x:0,v:0},aL:{x:0,v:0},aR:{x:0,v:0}},q0:null,qc:null});}
+const hrBones=N=>N._rb||(N._rb=RAG_BONES(N));
+function hrPick(opts){let tot=0;const w=opts.map(([k,wt])=>{const i=HRK.last.indexOf(k),f=i<0?1:[0.12,0.4,0.7,0.9][i];tot+=wt*f;return wt*f;});let r=Math.random()*tot;
+  for(let i=0;i<opts.length;i++){r-=w[i];if(r<=0){HRK.last.unshift(opts[i][0]);HRK.last.length=Math.min(HRK.last.length,4);return opts[i][0];}}return opts[0][0];}
+function hrActive(p){return !!(p.hr&&p.hr.r&&p.mode!=='rag');}
+function hrCapture(H,N,key){const B=hrBones(N);if(!H[key])H[key]=B.map(()=>new THREE.Quaternion());B.forEach((b,i)=>H[key][i].copy(b.quaternion));H[key+'y']=N.joints.hips.position.y;}
+// a shot has struck p: returns true if they're going down (dying or falling), so the caller leaves their behaviour be
+function hrHit(p,h,D,W,kill,o){const H=hrState(p),g=p.g,N=g.userData.npc,st=npcState(g),now=ME.t;
+  if(p.mode==='rag')return false;
+  H.bal=Math.min(1,H.bal+(now-H.balT)*0.45);H.balT=now;
+  const cp=Math.cos(p.psi),sp=Math.sin(p.psi),Dh=_V().set(D.x,0,D.z);Dh.divideScalar(Dh.length()||1);
+  const fw=Dh.x*cp-Dh.z*sp,lt=-Dh.x*sp-Dh.z*cp;   // + : pushed forward (shot from behind); + : pushed to his left
+  const mom=_V().set(st.vx||0,0,st.vz||0),msp=mom.length(),moving=msp>0.6,running=msp>2.8;
+  const crouch=(p.cop&&p.cs&&(p.cs.ck||0)>0.4)||p.mode==='cower';
+  const pw=W.rifle?1.5:(W.dmg||30)/30,zone=h.zone,I=pw*({head:0.7,chest:1,pelvis:1.15,arm:0.45,leg:1.25}[zone]||1);
+  const tq=((h.point.z-p.z)*Dh.x-(h.point.x-p.x)*Dh.z);   // the twist the hit puts round him (y of r x F)
+  const quick=now-H.lastT<1.1;H.hits++;H.lastT=now;
+  H.bal-=I*0.3*(running?1.45:moving?1.15:1)*(p.hp<45?1.35:1)*(crouch?0.75:1)*(zone==='leg'?1.45:1)*(quick?1.25:1);
+  if(h.bone&&zone!=='head'){h.bone.updateMatrixWorld(true);H.wound={bone:h.bone,L:h.bone.worldToLocal(h.point.clone()),arm:N.arms.R.sh===h.bone||N.arms.R.el===h.bone?'R':N.arms.L.sh===h.bone||N.arms.L.el===h.bone?'L':null};H.woundT=now;}
+  hrFlinch(H,N,h,zone,fw,lt,tq,pw);
+  const r=H.r;
+  if(kill){p.dying=true;hrDropGun(p,D);
+    if(r&&r.dying||r&&r.t<0.08){hrDown(p,Dh,pw,mom,'limp',true);return true;}
+    let kind;if(zone==='head')kind='limp';else if(running)kind='tumble';else if(crouch)kind='slump';
+    else kind=hrPick([['collapse',3],['stagger',2.2],['twist',1.6],['limp',0.8]]);
+    if(kind==='limp'||kind==='tumble'||kind==='slump'){hrDown(p,Dh,pw,mom,kind,true);return true;}
+    hrBegin(p,kind,Dh,fw,lt,tq,I,mom,true);return true;}
+  // the arm with the gun: anyone but an officer lets go of it
+  if(zone==='arm'&&!p.cop&&p.gobj&&H.wound&&H.wound.arm==='L'&&Math.random()<0.75){hrDropGun(p,D);p.gun=null;const src=o&&o.shooter||ME.it&&ME.it.pl;if(src)pedFlee(p,src.x,src.z,0.1);else p.mode='walk';}
+  if(H.bal<0||(zone==='leg'&&running&&Math.random()<0.65)||(!p.cop&&p.hp<18)||(p.hp<35&&H.bal<0.5&&Math.random()<0.5)){hrDown(p,Dh,pw,mom,'fall',false);H.bal=0.55;return true;}
+  if(crouch)return false;                                  // in cover or cowering: the flinch only (the body stays down)
+  if(r&&!r.dying){// already reeling: pushed further
+    r.vx+=Dh.x*0.8*I;r.vz+=Dh.z*0.8*I;r.turnV+=tq*6;r.dur=Math.min(r.t+0.6,Math.max(r.dur,r.t+0.35),1.7);r.bp=clamp(r.bp-fw*0.12,-0.5,0.5);return false;}
+  if(zone==='leg'){hrBegin(p,'buckle',Dh,fw,lt,tq,I,mom,false);p.limp=true;return false;}
+  if(running){hrBegin(p,'lurch',Dh,fw,lt,tq,I,mom,false);return false;}
+  if(I>=0.9||quick||H.bal<0.45){hrBegin(p,'stagger',Dh,fw,lt,tq,I,mom,false);return false;}
+  return false;}
+// the spring kick of a hit on the torso, head and a hit arm
+function hrFlinch(H,N,h,zone,fw,lt,tq,pw){const S=H.sp,k=pw*(zone==='arm'?1.6:zone==='leg'?1.4:zone==='head'?2.4:3.6);
+  S.pt.v+=-fw*k*(zone==='pelvis'?0.6:1);S.rl.v+=lt*k*0.8;S.yw.v+=clamp(tq*30,-6,6)*pw;S.hd.v+=-fw*k*(zone==='head'?2.2:1.1)+(Math.random()-0.5)*2;
+  if(zone==='arm'&&H.wound&&H.wound.arm){const a=H.wound.arm==='L'?S.aL:S.aR;a.v+=(fw<0?-1:1)*7*pw;}}
+function hrSprings(p,N,dt){const S=p.hr.sp,J=N.joints,A=N.arms;let e=0;
+  const step=(s,w,z)=>{const acc=-w*w*s.x-2*z*w*s.v;s.v+=acc*dt;s.x+=s.v*dt;s.x=clamp(s.x,-0.7,0.7);e+=Math.abs(s.x)+Math.abs(s.v)*0.05;};
+  step(S.pt,13,0.5);step(S.rl,13,0.5);step(S.yw,11,0.55);step(S.hd,17,0.45);step(S.aL,11,0.5);step(S.aR,11,0.5);
+  if(e<0.002)return false;
+  J.spine.rotation.z+=S.pt.x;J.chest.rotation.x+=S.rl.x;J.chest.rotation.y+=S.yw.x;J.head.rotation.z+=S.hd.x-S.pt.x*0.4;J.head.rotation.x-=S.rl.x*0.6;
+  A.L.sh.rotation.z+=S.aL.x;A.R.sh.rotation.z+=S.aR.x;return true;}
+// a reaction that takes the body over for a moment
+function hrBegin(p,kind,Dh,fw,lt,tq,I,mom,dying){const H=p.hr,N=p.g.userData.npc;hrCapture(H,N,'q0');
+  const r={kind,t:0,dying,vx:0,vz:0,damp:2.6,turnV:clamp(tq*9,-2.6,2.6),bp:clamp(-fw*0.34,-0.4,0.4),br:clamp(lt*0.3,-0.3,0.3),dur:0.7,ck:0,fwd:fw};
+  const v=(s,m)=>{r.vx=Dh.x*s+mom.x*m;r.vz=Dh.z*s+mom.z*m;};
+  if(kind==='stagger'){r.dur=(dying?0.5+Math.random()*0.25:0.55+0.35*Math.min(1,I)+(H.bal<0.35?0.2:0));v((0.9+0.7*Math.min(1.5,I))*(H.bal<0.35?1.3:1)*(dying?1.1:1),0.55);}
+  else if(kind==='lurch'){r.dur=0.6;v(0.5,0.9);r.damp=1.6;r.bp=fw<0?0.22:-0.38;}
+  else if(kind==='buckle'){r.dur=1.0+Math.random()*0.6;v(0.35,0.3);r.damp=5;r.ckT=0.72+Math.random()*0.15;}
+  else if(kind==='collapse'){r.dur=0.42+Math.random()*0.15;v(0.25,0.35);r.damp=4;r.ckT=0.75;r.turnV*=0.4;}
+  else if(kind==='twist'){r.dur=0.45+Math.random()*0.12;v(0.3,0.4);r.damp=4;r.turnV=(tq>=0?1:-1)*(2.6+Math.random());}
+  H.r=r;H.bo=null;}
+const _hq=new THREE.Quaternion();
+function hrStep(p,dt){const H=p.hr,r=H.r,g=p.g,N=g.userData.npc,J=N.joints,A=N.arms;r.t+=dt;const u=Math.min(1,r.t/r.dur);
+  const k=Math.exp(-dt*r.damp);r.vx*=k;r.vz*=k;const ox=p.x,oz=p.z;p.x+=r.vx*dt;p.z+=r.vz*dt;
+  if(insideBuilding(p.x,p.z)){p.x=ox;p.z=oz;r.vx*=-0.2;r.vz*=-0.2;}
+  wallPush(p,0.28,p.y+0.9);p.y=groundAt(p.x,p.z,p.y+0.6).y;
+  r.turnV*=Math.exp(-dt*3.5);p.psi+=r.turnV*dt;
+  p.node.position.set(p.x,p.y,p.z);p.node.rotation.set(0,p.psi,0);
+  if(camera.position.distanceTo(p.node.position)<110){const fx=animFx(g);fx.aim=0;fx.look=null;const sp=Math.hypot(r.vx,r.vz);
+    npcPose(g,ME.t+(p.voice||0)*9,sp>0.12?Math.min(1.7,sp/1.4):0,dt);
+    // down toward a crouch (a leg giving, a collapse): blended bone by bone with the steps
+    if(r.ckT){const ck=r.kind==='collapse'?r.ckT*ezs(u):r.ckT*Math.min(ezs(r.t/0.22),u>0.62?ezs((1-u)/0.38):1);
+      if(ck>0.01){hrCapture(H,N,'qc');apply(N,crouchPose(N,0,0));const B=hrBones(N),cy=J.hips.position.y;B.forEach((b,i)=>{_hq.copy(b.quaternion);b.quaternion.copy(H.qc[i]).slerp(_hq,ck);});J.hips.position.y=H.qcy+(cy-H.qcy)*ck;}}
+    const e=ezs(Math.min(r.t/0.1,u>0.62?(1-u)/0.38:1));
+    if(r.kind==='stagger'){J.spine.rotation.z+=r.bp*1.25*e;J.chest.rotation.x+=r.br*1.2*e;J.head.rotation.z-=r.bp*0.5*e;J.hips.rotation.z=(J.hips.rotation.z||0)+r.bp*0.35*e;
+      N.legs.L.kn.rotation.z-=0.22*e;N.legs.R.kn.rotation.z-=0.22*e;N.legs.L.hp.rotation.z+=0.12*e;N.legs.R.hp.rotation.z+=0.12*e;J.hips.position.y-=0.03*e;
+      const out=0.6*e*(1.25-Math.min(1,H.bal));A.L.sh.rotation.x-=out;A.R.sh.rotation.x+=out;A.L.el.rotation.z+=0.45*e;A.R.el.rotation.z+=0.45*e;}
+    else if(r.kind==='lurch'){J.spine.rotation.z+=r.bp*e;A.L.sh.rotation.z+=0.6*e;A.R.sh.rotation.z+=0.6*e;A.L.sh.rotation.x-=0.2*e;A.R.sh.rotation.x+=0.2*e;}
+    else if(r.kind==='buckle'){J.spine.rotation.z-=0.22*e;J.head.rotation.z-=0.2*e;}
+    else if(r.kind==='collapse'){J.spine.rotation.z-=0.55*u;J.head.rotation.z-=0.45*u;A.L.sh.rotation.x+=0.15*u;A.R.sh.rotation.x-=0.15*u;}
+    else if(r.kind==='twist'){J.spine.rotation.z+=r.bp*e-0.25*u;J.head.rotation.z-=0.3*u;}
+    hrSprings(p,N,dt);
+    if(!p.cop&&!p.gobj&&(r.kind==='buckle'||r.kind==='stagger'))hrHold(p,N,Math.min(1,r.t/0.25));
+    // into the reaction from wherever the body was (an aim, a run, a crouch): a tenth of a second
+    if(r.t<0.12&&H.q0){const B=hrBones(N),b0=ezs(r.t/0.12);B.forEach((b,i)=>{_hq.copy(b.quaternion);b.quaternion.copy(H.q0[i]).slerp(_hq,b0);});J.hips.position.y=H.q0y+(J.hips.position.y-H.q0y)*b0;}}
+  if(r.t>=r.dur)hrEnd(p);}
+function hrEnd(p){const H=p.hr,r=H.r,N=p.g.userData.npc;H.r=null;
+  if(r.dying){// the last of it: down, with the way they were going
+    const Dh=_V().set(r.vx,0,r.vz),s=Dh.length();if(s>1e-3)Dh.divideScalar(s);else Dh.set(Math.cos(p.psi)*(r.fwd>0?1:-1),0,-Math.sin(p.psi)*(r.fwd>0?1:-1));
+    hrDown(p,Dh,0.6,_V().set(r.vx,0,r.vz),r.kind==='collapse'?'slump':'limp',true);return;}
+  hrCapture(H,N,'bo');H.bo={t:0};H.recT=p.cop?1.2:3.5;}
+// down: dead, or knocked off their feet (they'll get up, unless badly hurt)
+function hrDown(p,Dh,pw,mom,kind,dead){const H=hrState(p);H.r=null;H.bo=null;const up=_V().set(0,1,0);let vel,spin;
+  const topple=(d,s)=>new THREE.Vector3(d.z,0,-d.x).multiplyScalar(s);   // turning about this axis tips the top toward d
+  if(kind==='tumble'){const m=mom.clone();const ms=m.length()||1;vel=m.clone().multiplyScalar(0.95).addScaledVector(Dh,0.3*pw);vel.y=0.4;spin=topple(m.divideScalar(ms),2.4+Math.random());}
+  else if(kind==='slump'){vel=Dh.clone().multiplyScalar(0.25).addScaledVector(mom,0.5);vel.y=0;spin=topple(Dh,0.4+Math.random()*0.4);}
+  else if(kind==='fall'){vel=mom.clone().multiplyScalar(0.85).addScaledVector(Dh,0.6*pw);vel.y=0.15;spin=topple(Dh,1.1+Math.random()*0.9);}
+  else{vel=mom.clone().multiplyScalar(0.85).addScaledVector(Dh,0.45*pw);vel.y=0.05;spin=topple(Dh,0.7+Math.random()*0.8);}
+  if(dead){pedDropGun(p);pedRag(p,vel,spin,true);bloodPool(p);p.dying=false;return;}
+  pedRag(p,vel,spin,false);
+  if(p.rag){if(!p.cop&&p.hp<22){p.rag.lieFor=1e9;p.rag.incap=true;p.incap=true;bloodPool(p);}else p.rag.lieFor=p.cop?1.6+Math.random()*1.4:2.2+Math.random()*2.5;}}
+// every frame, after the body's own pose: the flinch springs, coming out of a reaction, holding a wound
+function hrAfter(p,dt){const H=p.hr;if(!H||p.mode==='rag'||H.r)return;if(camera.position.distanceTo(p.node.position)>110)return;const N=p.g.userData.npc,J=N.joints;
+  hrSprings(p,N,dt);
+  if(H.recT>0){H.recT-=dt;const e=Math.min(1,H.recT/1.2);J.spine.rotation.z-=0.14*e;J.head.rotation.z-=0.08*e;}
+  if(!p.cop&&!p.gobj&&p.mode!=='fight'&&p.mode!=='cower'&&p.mode!=='handsup'&&!p.phone&&H.wound&&p.hp<92){const a=ME.t-H.woundT;if(a<14)hrHold(p,N,Math.min(1,a/0.35)*Math.min(1,(14-a)/1.5));}
+  if(H.bo&&H.qbo){H.bo.t+=dt;const e=ezs(H.bo.t/0.25),B=hrBones(N);B.forEach((b,i)=>{_hq.copy(b.quaternion);b.quaternion.copy(H.qbo[i]).slerp(_hq,e);});J.hips.position.y=H.qboy+(J.hips.position.y-H.qboy)*e;if(e>=1)H.bo=null;}}
+// a hand pressed to the wound (the other hand, if it was an arm)
+function hrHold(p,N,w){const H=p.hr;if(!H.wound||w<=0.01)return;const side=H.wound.arm==='R'?'L':'R';const b=H.wound.bone;b.updateMatrixWorld(true);armTo(p.g,side,b.localToWorld(H.wound.L.clone()),0.9*w);}
+// a gun let go of: it drops from the hand, tumbles, bounces with a clatter and lies there
+function hrDropGun(p,D){const o=p.gobj;if(!o||!o.m||!o.m.parent)return;const m=o.m;m.updateMatrixWorld(true);scene.attach(m);p.gobj=null;const i=SHOOTERS.indexOf(p);if(i>=0)SHOOTERS.splice(i,1);
+  if(GUNS_DROP.length>=10){const q=GUNS_DROP.shift();if(q.m.parent)q.m.parent.remove(q.m);}
+  GUNS_DROP.push({m,v:_V().set((Math.random()-0.5)*1.2+D.x*0.7,0.6+Math.random()*1.1,(Math.random()-0.5)*1.2+D.z*0.7),w:_V().set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).multiplyScalar(14),t:0,rest:false,b:0});}
+function hrDropsStep(dt){for(let i=GUNS_DROP.length-1;i>=0;i--){const q=GUNS_DROP[i],m=q.m;q.t+=dt;if(q.t>90||!m.parent){if(m.parent)m.parent.remove(m);GUNS_DROP.splice(i,1);continue;}if(q.rest)continue;
+    q.v.y-=9.81*dt;m.position.addScaledVector(q.v,dt);const wl=q.w.length();if(wl>0.01){_hq.setFromAxisAngle(_cp.copy(q.w).divideScalar(wl),wl*dt);m.quaternion.premultiply(_hq);}
+    const gy=groundAt(m.position.x,m.position.z,m.position.y+0.3).y+0.025;
+    if(m.position.y<gy){m.position.y=gy;if(Math.abs(q.v.y)>0.9&&q.b<3){q.b++;q.v.y=-q.v.y*0.28;q.v.x*=0.5;q.v.z*=0.5;q.w.multiplyScalar(0.45);sndGunDrop(m.position,q.b);}
+      else{q.rest=true;const e=new THREE.Euler().setFromQuaternion(m.quaternion,'YXZ');m.rotation.order='YXZ';m.rotation.set(Math.PI/2*(Math.random()<0.5?1:-1),e.y,0);}}}}
+function sndGunDrop(P,b){const V=voiceAt(P.clone(),0.35/(b||1));if(!V)return;const t=V.t;gnz(V,t,0.03,'bandpass',1800,1.5,0.7);const f=700+Math.random()*400;gtone(V,t,f,f*0.97,0.18,0.18,'triangle');gtone(V,t,f*2.3,f*2.25,0.1,0.08,'triangle');gtone(V,t,160,80,0.06,0.35);}
+// lying hurt (not getting up): weak movement that dies away
+function ragWrithe(R,dt){const N=R.N,A=N.arms,Lg=N.legs,J=N.joints;const B=[A.L.sh,A.R.sh,A.L.el,A.R.el,Lg.L.hp,Lg.R.hp,Lg.L.kn,Lg.R.kn,J.head];
+  if(!R.wb||R.t<(R._wl||0)){R.wb=B.map(b=>b.quaternion.clone());R.wp=B.map(()=>[Math.random()*TAU,0.3+Math.random()*0.4]);R.wt=0;}R._wl=R.t;R.wt=(R.wt||0)+dt;
+  const f=Math.max(0,1-R.wt/45),amp=[0.16,0.16,0.22,0.22,0.1,0.1,0.18,0.18,0.1];if(f<=0)return;
+  B.forEach((b,i)=>{const [ph,fr]=R.wp[i],a=amp[i]*f*(0.5+0.5*Math.sin(R.wt*0.27+ph))*Math.sin(R.wt*fr*TAU+ph);b.quaternion.copy(R.wb[i]).multiply(_hq.setFromEuler(_he.set(0,0,a)));});}
+const _he=new THREE.Euler();
+// getting up from the ground: to the knees, hands pushing, then up
+function getupPose2(u,N){const K=crouchPose(N,0,0);K.spz=(K.spz||0)-0.4;K.sh=[[0.55,0.25,0],[0.45,0.25,0]];K.el=[[0.55,0],[0.55,0]];K.hdz=(K.hdz||0)+0.15;
+  if(u<0.5)return K;return lerpP(K,PZ(),ezs((u-0.5)/0.5));}
+
 function impact(h,D,W,o){const P=h.point,N=h.normal||D.clone().negate(),big=W.rifle?1.4:1;
   if(h.kind==='person'){personShot(h,D,W,o);return;}
   if(h.kind==='occupant'){occupantShot(h,D,W);return;}
   if(h.kind==='car'){carShot(h,D,W);return;}
-  // the world
-  let mat='concrete';
-  if(h.kind==='ground')mat=h.g==='ground'?'dirt':(h.g==='road'||h.g==='deck')?'asphalt':'concrete';
-  else if(h.kind==='water')mat='water';else if(h.kind==='tree'||h.kind==='wood')mat='wood';else if(h.kind==='post'||h.kind==='metalbox')mat='metal';
-  else if(h.kind==='wall'&&h.w&&h.w.y1<20&&!h.w.shop)mat='metal';
-  if(mat==='water'){fxSplash(new THREE.Vector3(P.x,WATER_Y,P.z));sndImpact('water',P);return;}
-  fxImpact(P,N,mat,big);decalAt(P,N,mat==='metal'?'metal':mat==='wood'?'wood':mat==='asphalt'?'asphalt':'concrete',null,W.rifle?0.06:0.045);sndImpact(mat,P);
-  if((mat==='concrete'||mat==='metal'||mat==='asphalt')&&Math.random()<0.18)sndRicochet(P);}
+  impactWorld(h,D,W);}
 function hitGlass(g,D,W){const c=g.c;if(c.a&&!c.a.driverDead)TR.scare(c.a.x,c.a.z,3,30,true,c.a.x-D.x*20,c.a.z-D.z*20);
   if(c.v){const v=c.v,Wn=(v.windows||[]).find(x=>x.mesh===g.obj);glassHole(v,Wn,g.obj,g.point,D,W);}
   else{const Dm=c.a.dmg,Wn=Dm&&Dm.windows.find(x=>x.mesh===g.obj);if(Dm)glassHole(Dm,Wn,g.obj,g.point,D,W);if(c.a.parked&&!c.a.driver)ALARM_Q.add(c.a);}
@@ -22307,16 +22586,14 @@ function personShot(h,D,W,o){const T=h.who,zone=h.zone,P=h.point;let dmg=W.dmg*(
   // someone on the street
   const p=T;if(p.dead&&p.rag){ragPush(p.rag,h,D,W);return;}
   p.hp-=dmg;p.lastBy=byMe?'player':'gun';if(byMe)hitMark(p.hp<=0||zone==='head');
-  if(p.mode==='rag'&&p.rag){ragPush(p.rag,h,D,W);if(p.hp<=0){p.dead=true;p.rag.lieFor=1e9;bloodPool(p);}return;}
-  if(p.hp<=0||zone==='head'){pedDropGun(p);pedRag(p,D.clone().multiplyScalar(zone==='head'?2.8:2.2).add(new THREE.Vector3(0,0.35,0)),new THREE.Vector3(-D.z,0,D.x).multiplyScalar(zone==='chest'?2.5:3.5),true);bloodPool(p);return;}
-  if(zone==='leg'&&Math.random()<0.6){pedRag(p,D.clone().multiplyScalar(1.1).add(new THREE.Vector3(0,0.25,0)),new THREE.Vector3(-D.z,0,D.x).multiplyScalar(2),false);p.limp=true;return;}
-  // a flinch away from the hit, the body twisting with it, then they act
-  p.hurt={t:0,dx:D.x*0.8,dz:D.z*0.8,side:Math.random()<0.5?1:-1};p.punch=null;try{const ps=p.psi,m=W.rifle?1.6:1.2;animFlinch(p.g,(D.x*Math.cos(ps)-D.z*Math.sin(ps))*m,(D.x*Math.sin(ps)+D.z*Math.cos(ps))*m);}catch(e){}
+  if(p.mode==='rag'&&p.rag){ragPush(p.rag,h,D,W);if(p.hp<=0&&!p.dead){p.dead=true;p.incap=false;p.rag.incap=false;p.rag.lieFor=1e9;bloodPool(p);}return;}
+  if(hrHit(p,h,D,W,p.hp<=0||zone==='head',o))return;
+  p.punch=null;
   if(p.cop){wCopHurt(p,byMe);return;}
   if(p.gun&&(p.brave||p.hp>50)&&byMe)pedStartShoot(p);else if(byMe&&ME.it)pedFlee(p,ME.it.pl.x,ME.it.pl.z,0.15);else if(o&&o.shooter)pedFlee(p,o.shooter.x,o.shooter.z,0.15);}
 // the ragdoll takes the bullet: the point nearest the hit is pushed along it
-function ragPush(R,h,D,W){if(!R||!R.p)return;let bi=0,bd=1e9;R.p.forEach((q,i)=>{const d=q.distanceTo(h.point);if(d<bd){bd=d;bi=i;}});const k=(W.rifle?3.2:2.2)/120;R.prev[bi].addScaledVector(D,-k);if(R.mode!=='fall'){R.mode='fall';R.t=0;R.still=0;}}
-function playerShot(dmg,D,zone,o){if(ME.dead)return;if(!ME.car&&ME.it)try{const ps=ME.it.pl.psi;animFlinch(ME.it.g,(D.x*Math.cos(ps)-D.z*Math.sin(ps))*1.3,(D.x*Math.sin(ps)+D.z*Math.cos(ps))*1.3);}catch(e){}PLAYER.hp-=dmg*0.7;PLAYER.hurtT=0.35;PLAYER.regenT=8;hpShow();hurtFlash(0.8);
+function ragPush(R,h,D,W){if(!R||!R.p)return;let bi=0,bd=1e9;R.p.forEach((q,i)=>{const d=q.distanceTo(h.point);if(d<bd){bd=d;bi=i;}});const k=(W.rifle?2.0:1.4)/120;R.prev[bi].addScaledVector(D,-k);if(R.mode!=='fall'){R.mode='fall';R.t=0;R.still=0;}}
+function playerShot(dmg,D,zone,o){if(ME.dead||window.__GOD)return;if(!ME.car&&ME.it)try{const ps=ME.it.pl.psi;animFlinch(ME.it.g,(D.x*Math.cos(ps)-D.z*Math.sin(ps))*1.3,(D.x*Math.sin(ps)+D.z*Math.cos(ps))*1.3);}catch(e){}PLAYER.hp-=dmg*0.7;PLAYER.hurtT=0.35;PLAYER.regenT=8;hpShow();hurtFlash(0.8);
   if(!ME.car){ME.pitch=clamp(ME.pitch-(0.03+Math.random()*0.045),-0.55,1.25);ME.yaw+=(Math.random()<0.5?-1:1)*(0.03+Math.random()*0.05);}WP.bloom=Math.min(0.09,WP.bloom+0.04);
   if(PLAYER.hp<=0||zone==='head'&&Math.random()<0.5){PLAYER.hp=0;hpShow();playerDie(D);}}
 
@@ -22457,14 +22734,14 @@ function fxInit(){if(FX.ok)return;FX.ok=true;
     const m=new THREE.PointsMaterial({size,vertexColors:true,transparent:true,opacity:add?1:0.95,depthWrite:false,blending:add?THREE.AdditiveBlending:THREE.NormalBlending,sizeAttenuation:true});const p=new THREE.Points(g,m);p.frustumCulled=false;p.userData.fx=true;scene.add(p);return {p,n,L:[]};};
   FX.pts=mkPts(300,0.035,true);FX.bits=mkPts(500,0.03,false);
   const cg=new THREE.CylinderGeometry(0.0048,0.0048,1,6);cg.rotateZ(Math.PI/2);const cm=new THREE.MeshStandardMaterial({color:0xc9a04a,roughness:0.3,metalness:0.9});FX.cases=new THREE.InstancedMesh(cg,cm,220);FX.cases.count=0;FX.cases.frustumCulled=false;FX.cases.instanceMatrix.setUsage(THREE.DynamicDrawUsage);scene.add(FX.cases);
-  for(let i=0;i<90;i++){const s=new THREE.Sprite(new THREE.SpriteMaterial({map:T.smoke,transparent:true,depthWrite:false,opacity:0}));s.visible=false;s.userData.fx=true;scene.add(s);FX.sprites.push({s,on:false});}}
+  for(let i=0;i<90;i++){const s=new THREE.Sprite(new THREE.SpriteMaterial({map:T.smoke,transparent:true,depthWrite:false,opacity:0}));s.visible=false;s.userData.fx=true;scene.add(s);FX.sprites.push({s,on:false});}fxImpactTex();}
 function fxSprite(tex,pos,vel,size,life,opacity,color,add,grow,rise){const e=FX.sprites.find(q=>!q.on)||FX.sprites.reduce((a,b)=>a.t/a.life>b.t/b.life?a:b);const s=e.s,m=s.material;
   m.map=tex;m.blending=add?THREE.AdditiveBlending:THREE.NormalBlending;m.color.setHex(color||0xffffff);m.opacity=opacity;m.rotation=Math.random()*TAU;m.needsUpdate=true;
   s.position.copy(pos);s.scale.setScalar(size);s.visible=true;Object.assign(e,{on:true,t:0,life,v:vel.clone(),size,grow:grow||1,o0:opacity,rise:rise||0});return e;}
 function fxSmoke(pos,vel,size,life,op,col){if(!FX.ok)return;fxSprite(FX.tex.smoke,pos,vel,size,life,op,col,false,2.4,0.15);}
-function fxFlash(M,D,W,gunG){if(!FX.ok)return;const s=W.flash;const e=fxSprite(FX.tex.flash,M.clone().addScaledVector(D,s*0.3),new THREE.Vector3(),s*(0.8+Math.random()*0.5),0.045,1,0xffffff,true,1.2);
+function fxFlash(M,D,W,gunG){if(!FX.ok)return;const s=W.flash*whOf(W.id).flash*(Math.random()<0.22?0.65:0.9+Math.random()*0.25);const e=fxSprite(FX.tex.flash,M.clone().addScaledVector(D,s*0.3),new THREE.Vector3(),s*(0.8+Math.random()*0.5),0.045,1,0xffffff,true,1.2);
   fxSprite(FX.tex.flash,M.clone().addScaledVector(D,s*0.9),new THREE.Vector3(),s*0.6,0.035,0.8,0xffd27a,true,1);
-  FX.light.position.copy(M).addScaledVector(D,0.2);FX.light.intensity=W.rifle?5:3.2;FX.lightT=0.06;
+  FX.light.position.copy(M).addScaledVector(D,0.2);FX.light.intensity=whOf(W.id).flashL*(0.75+Math.random()*0.45);FX.light.color.setHSL(0.085+Math.random()*0.035,1,0.6+Math.random()*0.08);FX.lightT=0.06;
   for(let i=0;i<(W.rifle?4:3);i++)fxSmoke(M.clone().addScaledVector(D,0.05+i*0.06),D.clone().multiplyScalar(0.6+Math.random()*0.8).add(new THREE.Vector3((Math.random()-0.5)*0.3,0.15+Math.random()*0.2,(Math.random()-0.5)*0.3)),0.07+Math.random()*0.05,0.9+Math.random()*0.6,0.33,0xd0d0d0);
   for(let i=0;i<4;i++)fxPt(FX.pts,M,D.clone().multiplyScalar(6+Math.random()*6).add(_V().set(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).multiplyScalar(3)),0.05,0xffc060,0);}
 function fxPt(S,pos,vel,life,col,grav,kind){if(S.L.length>=S.n)S.L.shift();S.L.push({x:pos.x,y:pos.y,z:pos.z,vx:vel.x,vy:vel.y,vz:vel.z,t:0,life,c:new THREE.Color(col),g:grav==null?9.81:grav,kind});}
@@ -22487,11 +22764,6 @@ function fxCasing(o,W){if(!FX.ok)return;o.g.updateMatrixWorld(true);const P=o.g.
   const right=new THREE.Vector3(0,0,1).applyQuaternion(q),up=new THREE.Vector3(0,1,0).applyQuaternion(q),back=new THREE.Vector3(-1,0,0).applyQuaternion(q);
   const v=right.multiplyScalar(2.2+Math.random()*1.2).addScaledVector(up,1.2+Math.random()*0.8).addScaledVector(back,0.4+Math.random()*0.6);
   if(FX.caseL.length>=220)FX.caseL.shift();FX.caseL.push({x:P.x,y:P.y,z:P.z,vx:v.x,vy:v.y,vz:v.z,q:q.clone(),w:new THREE.Vector3(Math.random()-0.5,Math.random()-0.5,Math.random()-0.5).multiplyScalar(40),len:W.rifle?0.039:0.019,t:0,rest:false,b:0,rifle:!!W.rifle});}
-// a hole in something, a little decal on it (travels with it if it's a car part)
-function holeOn(obj,P,N,size,kind){if(!FX.ok)return;const m=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshStandardMaterial({map:FX.tex[kind],transparent:true,depthWrite:false,polygonOffset:true,polygonOffsetFactor:-6,polygonOffsetUnits:-6,roughness:0.8}));
-  m.userData.fx=true;m.userData.decal=true;m.scale.setScalar(size);m.position.copy(P).addScaledVector(N,0.004);m.lookAt(P.clone().add(N));m.rotateZ(Math.random()*TAU);scene.add(m);if(obj){obj.attach(m);}
-  FX.decals.push(m);if(FX.decals.length>160){const o=FX.decals.shift();if(o.parent)o.parent.remove(o);o.geometry.dispose();o.material.dispose();}return m;}
-function decalAt(P,N,kind,obj,size){return holeOn(obj,P,N,size,kind);}
 // blood on the person where they were hit (it moves with them)
 function bloodOn(h,D){if(!FX.ok||!h.bone)return;const A=h.A,B=h.B;let c=A;if(B){const u=B.clone().sub(A),t=clamp(h.point.clone().sub(A).dot(u)/u.lengthSq(),0,1);c=A.clone().addScaledVector(u,t);}
   const n=h.point.clone().sub(c);if(n.lengthSq()<1e-6)n.copy(D).negate();n.normalize();
@@ -22512,7 +22784,7 @@ function fxWarm(on,at){if(!FX.ok)return;if(on){FX.warm=[];const p=at.clone();
     FX.light.position.copy(p);}
   else{FX.sprites.forEach(e=>{e.s.visible=false;e.on=false;});[FX.pts,FX.bits].forEach(S=>S.p.geometry.setDrawRange(0,0));FX.cases.count=0;
     (FX.warm||[]).forEach(m=>{if(m.parent)m.parent.remove(m);const i=FX.decals.indexOf(m);if(i>=0)FX.decals.splice(i,1);});FX.warm=null;FX.light.position.set(0,-500,0);}}
-function fxClear(){if(!FX.ok)return;FX.decals.forEach(o=>{if(o.parent)o.parent.remove(o);o.geometry.dispose();o.material.dispose();});FX.decals.length=0;FX.caseL.length=0;FX.pts.L.length=0;FX.bits.L.length=0;POOLS.length=0;FX.sprites.forEach(e=>{e.on=false;e.s.visible=false;});}
+function fxClear(){if(!FX.ok)return;FX.decals.forEach(o=>{if(o.parent)o.parent.remove(o);(FX.dfree||(FX.dfree=[])).push(o);});FX.decals.length=0;GUNS_DROP.forEach(q=>{if(q.m.parent)q.m.parent.remove(q.m);});GUNS_DROP.length=0;FX.caseL.length=0;FX.pts.L.length=0;FX.bits.L.length=0;POOLS.length=0;FX.sprites.forEach(e=>{e.on=false;e.s.visible=false;});}
 const _cm=new THREE.Matrix4(),_cs=new THREE.Vector3(),_cp=new THREE.Vector3(),_cq=new THREE.Quaternion();
 function fxStep(dt){if(!FX.ok)return;
   if(FX.lightT>0){FX.lightT-=dt;FX.light.intensity*=0.45;if(FX.lightT<=0)FX.light.intensity=0;}
@@ -22533,7 +22805,7 @@ function fxStep(dt){if(!FX.ok)return;
       const wl=c.w.length();if(wl>0.01&&!c.rest){_cq.setFromAxisAngle(_cp.copy(c.w).divideScalar(wl),wl*dt);c.q.premultiply(_cq);}}}
   for(const c of FX.caseL){_cs.set(c.len,1,1);_cm.compose(_cp.set(c.x,c.y,c.z),c.q,_cs);im.setMatrixAt(n++,_cm);}
   im.count=n;im.instanceMatrix.needsUpdate=true;
-  poolsStep(dt);
+  poolsStep(dt);decalsStep();hrDropsStep(dt);
   // cars with a shot engine: smoke out from under the hood
   for(let i=SMOKERS.length-1;i>=0;i--){const t=SMOKERS[i];if(t.alive===false){SMOKERS.splice(i,1);continue;}}
   for(let i=FLATS.length-1;i>=0;i--)if(!FLATS[i].alive)FLATS.splice(i,1);
@@ -22565,16 +22837,16 @@ function voiceAt(pos,lvl){const B=gunBus();if(!B||!sndOK())return null;const c=D
 function gnz(V,t,dur,type,f,q,gain,att){const c=V.c,s=nzb(dur),fl=c.createBiquadFilter(),g=c.createGain();fl.type=type;fl.frequency.value=f;fl.Q.value=q;g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(gain,t+(att||0.0015));g.gain.exponentialRampToValueAtTime(0.0005,t+dur);
   s.connect(fl);fl.connect(g);g.connect(V.g);s.start(t,s._off||0);s.stop(t+dur+0.05);return fl;}
 function gtone(V,t,f0,f1,dur,gain,type){const c=V.c,o=c.createOscillator(),g=c.createGain();o.type=type||'sine';o.frequency.setValueAtTime(f0,t);o.frequency.exponentialRampToValueAtTime(Math.max(20,f1),t+dur);g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(gain,t+0.003);g.gain.exponentialRampToValueAtTime(0.0005,t+dur);o.connect(g);g.connect(V.g);o.start(t);o.stop(t+dur+0.05);}
-function sndShot(pos,W,mine){const V=voiceAt(pos,(W.loud||1)*1.1);if(!V)return;const t=V.t,r=!!W.rifle,far=V.d>60;
+function sndShot(pos,W,mine){const V=voiceAt(pos,(W.loud||1)*1.1*(0.92+Math.random()*0.16));if(!V)return;const S=whOf(W.id).snd,t=V.t,r=!!W.rifle,far=V.d>60,m=1+(Math.random()-0.5)*2*S.det,L=S.len;
   // the crack: the powder gas and (for the rifle) the bullet's own sonic snap
-  gnz(V,t,r?0.05:0.035,'highpass',r?3200:2600,0.7,r?1.1:0.95);
-  if(r)gnz(V,t,0.012,'bandpass',5200,1.2,0.6);
-  // the body of the report and the boom under it
-  gnz(V,t,r?0.22:0.14,'bandpass',r?700:950,0.75,r?1.5:1.25,0.002);
-  gtone(V,t,r?120:165,r?34:48,r?0.25:0.16,r?1.3:1.05);gtone(V,t,60,30,r?0.32:0.22,0.6);
-  gnz(V,t+0.004,r?0.45:0.3,'lowpass',far?380:520,0.6,r?0.55:0.4,0.01);
+  gnz(V,t,(r?0.05:0.035)*L,'highpass',S.crack*m,0.7,r?1.1:0.95);
+  if(r)gnz(V,t,0.012,'bandpass',5200*m,1.2,0.6);
+  // the body of the report and the boom under it (each gun its own pitch; each shot a little different)
+  gnz(V,t,(r?0.22:0.14)*L,'bandpass',S.body*m,0.75,r?1.5:1.25,0.002);
+  gtone(V,t,S.boom*m,S.boom*m*0.28,(r?0.25:0.16)*L,r?1.3:1.05);gtone(V,t,60*m,30,(r?0.32:0.22)*L,0.6);
+  gnz(V,t+0.004,(r?0.45:0.3)*L,'lowpass',(far?380:520)*m,0.6,r?0.55:0.4,0.01);
   // the mechanism, close up: the slide or the bolt slamming back and forward
-  if(V.d<12){gnz(V,t+0.02,0.018,'bandpass',r?1900:3100,4,0.22);gnz(V,t+0.06,0.02,'bandpass',r?1500:2600,4,0.18);}}
+  if(V.d<12){gnz(V,t+0.02,0.018,'bandpass',S.mech*m,4,0.22);gnz(V,t+0.06,0.02,'bandpass',S.mech*0.83*m,4,0.18);}}
 function sndImpact(mat,P){const V=voiceAt(P,0.5);if(!V)return;const t=V.t;
   if(mat==='flesh'){gtone(V,t,130,55,0.12,0.9);gnz(V,t,0.07,'lowpass',650,0.8,0.7);gnz(V,t+0.01,0.05,'bandpass',1400,1.5,0.25);return;}
   if(mat==='metal'||mat==='carmetal'){gnz(V,t,0.02,'bandpass',3500,2,0.8);const f=mat==='carmetal'?1100+Math.random()*500:2200+Math.random()*900;gtone(V,t,f,f*0.97,0.35,0.25,'triangle');gtone(V,t,f*1.52,f*1.5,0.22,0.12,'triangle');gtone(V,t,180,90,0.08,0.4);return;}
@@ -25177,6 +25449,10 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Gunplay overhaul: recoil climbs over a few hundredths of a second and most of it settles back when you stop; each gun has its own climb, sideways kick, drift (the AK pulls right on a long burst), flip, sway, weight when aiming, flash and report, and no two shots sound or flash quite alike',
+    'Bullet impacts by surface: concrete, stucco, stone, brick, asphalt, metal, wood, glass towers, dirt, grass, gravel, sand and water each have their own dust, chips, splinters, sand spray or splash, sparks only off metal (thrown along the ricochet), their own mark and sound; marks lie on the slope they hit, come from a reused pool and fade after a couple of minutes',
+    'Hit reactions for everyone on foot, police included: flinches, staggers with real steps, lurches when running, a leg buckling, falls with the speed they had, and deaths that collapse, stagger or turn before going down (never thrown); each person has a balance that hits wear down; reactions blend in and out, and an officer\'s AI simply waits and carries on',
+    'Guns fall from dying hands and clatter to the ground; someone shot in the gun arm (not police) lets go of it; people knocked down get up onto their knees and push up, then hold the wound for a while, and the badly hurt stay down',
     'Fixed: officers (and anyone running) no longer swing their body from side to side while chasing; only a real side-step turns the hips',
     'Police on foot stay near their car: chasing a runner, they go only so far (about 35 m) before running back to the car together and coming after you in it',
     'Police gunfights move naturally: officers hold their cover instead of hopping from end to end of the car, run to cover that is far and back or side-step to near cover with the gun up, flankers move to a spot then hold it and shoot; anyone stepping sideways or backwards now turns their hips into the step or backpedals, instead of sliding',
@@ -25979,7 +26255,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={_pol:()=>({WANT,WCOPS,wStars,crime,wMe,wCrewOut,units:()=>TR.pd.units(),PLAYER}),scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={_pol:()=>({WANT,WCOPS,wStars,crime,wMe,wCrewOut,units:()=>TR.pd.units(),PLAYER,shoot,WPN,PEDS,FX,GUNS_DROP,surfOf,traceAll,pedStartShoot,pedFlee,WD,matAt,heightAt,WP,MOUSE,giveGun,wpEquip,SAVE}),scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
