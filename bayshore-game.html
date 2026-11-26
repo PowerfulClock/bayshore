@@ -14515,7 +14515,8 @@ npcPose = function (root, t, gait, dt) {
   const every = d > 75 ? 3 : d > 38 ? 2 : 1; st.acc = (st.acc || 0) + dt; st.fr = ((st.fr || 0) + 1) % every;
   // what the body is really doing: its speed over the ground and how fast it turns
   const node = root.parent, hs = root.scale.y || 1;
-  if (node) { const P = node.position; if (st.mx != null && dt > 0) { const dd = Math.hypot(P.x - st.mx, P.z - st.mz); if (dd < 2.5) { const raw = dd / dt / hs; st.sm = (st.sm || 0) + (raw - (st.sm || 0)) * Math.min(1, dt * 9); } } st.mx = P.x; st.mz = P.z; }
+  if (node) { const P = node.position; if (st.mx != null && dt > 0) { const dd = Math.hypot(P.x - st.mx, P.z - st.mz); if (dd < 2.5) { const raw = dd / dt / hs, k = Math.min(1, dt * 9); st.sm = (st.sm || 0) + (raw - (st.sm || 0)) * k;
+    st.vx = (st.vx || 0) + ((P.x - st.mx) / dt - (st.vx || 0)) * k; st.vz = (st.vz || 0) + ((P.z - st.mz) / dt - (st.vz || 0)) * k; } } st.mx = P.x; st.mz = P.z; }
   const yaw = ((root.parent && root.parent.rotation.y) || 0) + root.rotation.y;
   if (st.yaw != null && dt > 0) { st.yr = (st.yr || 0) + (_cl(_wr(yaw - st.yaw) / dt, -7, 7) - (st.yr || 0)) * Math.min(1, dt * 6); st.ac = (st.ac || 0) + (_cl((st.v - st.v0) / dt, -4, 4) - (st.ac || 0)) * Math.min(1, dt * 5); }
   st.yaw = yaw; st.v0 = st.v;
@@ -14528,7 +14529,13 @@ npcPose = function (root, t, gait, dt) {
   const fW = mp.cad * (0.55 + 0.27 * pCl(spd, 0.3, 2.2)), fR = mp.cad * (1.25 + 0.06 * pCl(spd, 2, 8.5)), f = va <= 1 ? fW : pLerp(fW, fR, sm(Math.min(1, va - 1)));
   const betaW = 0.62, betaR = 0.31, need = spd * (va <= 1 ? betaW : betaR) / Math.max(0.4, f), base = va <= 1 ? 0.66 : 0.82;
   const skT = pCl(turnK > moveK ? 0.22 : need / base * mp.stride, 0.18, 1.55); st.sk = (st.sk || skT) + (skT - (st.sk || skT)) * Math.min(1, dtp * 6);
-  st.ph += dtp * 2 * Math.PI * f * Math.max(0.35, Math.min(1, va * 1.5 + turnK * 0.6));
+  // which way the body is going against where it faces: stepping sideways turns the hips (and legs) toward the step
+  // while the chest and head stay on target; going backwards runs the step cycle backwards (a backpedal)
+  let dA = 0, bk = 0;
+  if (node && spd > 0.35 && st.vx != null) { const c = Math.cos(yaw), s = Math.sin(yaw), fw = st.vx * c - st.vz * s, lt = -st.vx * s - st.vz * c, a = Math.atan2(lt, fw);
+    if (Math.abs(a) > 1.95) { bk = 1; dA = _wr(a - Math.PI); } else dA = a; dA = _cl(dA, -1.15, 1.15) * (va > 1 ? 0.75 : 1); }
+  const kD = Math.min(1, dtp * 7); st.dA = (st.dA || 0) + (dA - (st.dA || 0)) * kD; st.bk = (st.bk || 0) + (bk - (st.bk || 0)) * kD;
+  st.ph += dtp * 2 * Math.PI * f * Math.max(0.35, Math.min(1, va * 1.5 + turnK * 0.6)) * (st.bk > 0.5 ? -0.85 : 1);
   const style = R.walk || (R.sex === 'f' ? 'fem' : 'normal');
   const m0 = st.mv, mv = { f: m0 ? m0.f : 1, s: m0 ? m0.s : 0, c: m0 ? m0.c || 0 : 0, sp: _c01(v - 2) };
   const idle = R.idle || R.police ? IDLE[R.idle || IDLE_P[(N.index || 0) % 6]](PZ(), t + (N.index || 0) * 1.3) : pIdle(N, st, t, dtp, mp);
@@ -14540,6 +14547,7 @@ npcPose = function (root, t, gait, dt) {
     p.spz -= _cl(ac * 0.05, -0.12, 0.13); }
   // looking about (when nothing else is telling them where to look)
   if (d < 60) { const g = pGaze(N, st, t, dtp, mp, root, va > 0.3), fx = N.fx; if (!(fx && fx.look)) { p.hdy += g.y * 0.68; p.cry += g.y * 0.18; p.hdz -= g.p * 0.7; p.spz -= g.p * 0.05; } }
+  if (Math.abs(st.dA || 0) > 0.01) { const q = st.dA * Math.min(1, va * 2); p.hry += q * 0.85; p.cry -= q * 0.6; p.hdy -= q * 0.25; }
   animLayers(N, p, dtp, v, t);
   apply(N, p);
   // toes turned out a little, every step
@@ -24635,6 +24643,7 @@ function copSeatAnim(p,k){const cs=p.cs,a=p.unit.a,g=p.g,N=g.userData.npc,S=cs.s
 // back in the car
 function copBoardStart(p){const cs=p.cs;cs.st='in';cs.t=0;cs.seatL=wSeatLocal(p.unit.a,p.seat);if(p.gobj){if(p.gobj.m.parent)p.gobj.m.parent.remove(p.gobj.m);p.gobj=null;cs.draw=0;}}
 function copBoard(p){const u=p.unit,a=u.a;if(p.seatMesh&&uSeats(u)[p.seat].alive)p.seatMesh.visible=true;uSeats(u)[p.seat].hp=Math.min(100,p.hp);copRemove(p);}
+const WCOP_LEASH=34;   // how far an officer runs after someone on foot before going back for the car
 function wBoardAll(){for(const p of WCOPS)if(!p.dead&&p.cs.st!=='board'&&p.cs.st!=='arrest')p.cs.st='board';}
 // one officer's frame
 function wCopStep(p,dt,far){const me=wMe(),cs=p.cs,u=p.unit,a=u.a,g=p.g;cs.t+=dt;if(!me)return;
@@ -24665,18 +24674,33 @@ function wCopStep(p,dt,far){const me=wMe(),cs=p.cs,u=p.unit,a=u.a,g=p.g;cs.t+=dt
     if(!cs.style){const r=Math.random(),fl=WCOPS.some(q=>q!==p&&!q.dead&&q.cs.style==='flank');cs.style=r<0.34&&cs.door?'door':r<0.84||fl?'car':'flank';cs.covT=0;cs.upT=Math.random()*1.2;}
     const own=a.alive&&Math.hypot(a.x-p.x,a.z-p.z)<22;
     if(cs.style==='door'&&(!cs.door||!own||toCar(a,me.x,me.z).f<-(a.halfLen||2.4)*0.5||Math.sign(toCar(a,me.x,me.z).l)===Math.sign(cs.door.l)))cs.style='car';
-    cs.covT-=dt;if(cs.style!=='door'&&(cs.covT<=0||!cs.cov)){cs.covT=cs.style==='flank'?3+Math.random()*2:1.2;
-      cs.cov=cs.style==='flank'?wFlankSpot(p,me,d):(own?wCoverSpotCar(a,me,p.seat):wCoverSpot(p,me))||wCoverSpot(p,me);if(!cs.cov&&cs.style!=='flank')cs.style='flank';}
+    const atSpot=cs.cov&&Math.hypot(cs.cov.x-p.x,cs.cov.z-p.z)<1.3;
+    // the clock to think again only runs once he's there (a flanker holds his spot 4-7 s, the others check every few seconds)
+    cs.covT-=atSpot||!cs.cov?dt:dt*0.25;
+    if(cs.style!=='door'&&(cs.covT<=0||!cs.cov)){cs.covT=cs.style==='flank'?4+Math.random()*3:2.5+Math.random()*1.5;
+      let nc=cs.style==='flank'?wFlankSpot(p,me,d):(own?wCoverSpotCar(a,me,p.seat):wCoverSpot(p,me))||wCoverSpot(p,me);
+      if(nc&&cs.cov&&cs.style!=='flank'&&own&&wCovStill(cs.cov,a,own,me))nc=cs.cov;   // where he is still has the car between them: stay
+      if(nc&&cs.cov&&Math.hypot(nc.x-cs.cov.x,nc.z-cs.cov.z)<1.5)nc=cs.cov;
+      cs.cov=nc;if(!cs.cov&&cs.style!=='flank')cs.style='flank';}
     const cp=cs.style==='door'?door:(cs.cov||door);tx=cp.x;tz=cp.z;const far=Math.hypot(cp.x-p.x,cp.z-p.z),enRoute=cs.style!=='flank'&&far>1.3;
-    // on the way to cover: backing or side-stepping to it with the gun up, firing as he goes (not a sprint with his back turned)
-    gait=cs.style==='flank'?(far>4?1.3:0.7):far>7?1.7:far>1.3?1.2:0.9;cs.strafe=cs.style==='flank'||(enRoute&&p.see&&d<60);cs.mov=cs.strafe&&far>0.6;
+    // getting there: a run when it's far (gun down, no shooting on the move); close by, backing or side-stepping to it at a
+    // walk with the gun up, firing as he goes
+    const rush=far>8;
+    gait=rush?1.9:far>1.3?1.0:0.8;cs.strafe=!rush&&(cs.style==='flank'||enRoute)&&p.see&&d<60;cs.mov=cs.strafe&&far>0.6;cs.rush=rush&&far>1.3;
+    if(far<1.6&&(cs.held||far<0.5))stopR=1.6;cs.held=far<1.6;   // there: he holds the spot (no shuffling about on it)
     if(!hostile){cs.cov=null;cs.style=null;cs.strafe=false;cs.st=cs.door?'door':'stand';cs.t=0;wShout(p,'Put your hands up and surrender!');}
-    else if(cs.style==='flank'){aim=1;crouch=0;copShoot(p,dt,d);if(cs.mag<=0){cs.mag=15;cs.fire=2.2;sndMag('out',WPN.c10,p.node.position);}}
+    else if(cs.rush){aim=0;crouch=0;}
+    else if(cs.style==='flank'){aim=1;crouch=atSpot&&cs.kneel?1:0;if(cs.kneel==null)cs.kneel=Math.random()<0.4;if(crouch||cs.mov||atSpot){copShoot(p,dt,d);}if(cs.mag<=0){cs.mag=15;cs.fire=2.2;sndMag('out',WPN.c10,p.node.position);}}
     else if(enRoute){aim=1;crouch=0;copShoot(p,dt,d);if(cs.mag<=0){cs.mag=15;cs.fire=2.4;sndMag('out',WPN.c10,p.node.position);}}
     else{cs.upT-=dt;if(cs.upT<=0){cs.up=cs.up?0:1;cs.upT=cs.up?1.2+Math.random()*1.2:(cs.mag<=0?2.3:1.0+Math.random()*1.4);if(!cs.up&&cs.mag<=0){cs.mag=15;sndMag('out',WPN.c10,p.node.position);}}
       crouch=cs.up?0:1;aim=cs.up?1:0;if(cs.up)copShoot(p,dt,d);}}
   else if(st==='chase'){tx=me.x;tz=me.z;gait=d>3?2.25:0.8;stopR=1.4;
+    const fromCarD=orphan?0:Math.hypot(a.x-p.x,a.z-p.z);
     if(hostile){cs.st='shoot';cs.t=0;}
+    else if(!orphan&&!S.on&&fromCarD>WCOP_LEASH&&d>8&&!(d<7.5&&cs.taserT<=0)){
+      // too far from the car: everyone of this crew who's after him on foot heads back to it, and they follow in the car
+      for(const q of WCOPS)if(q.unit===u&&!q.dead&&['chase','stand','door','approach'].includes(q.cs.st)){q.cs.st='board';q.cs.ret=true;q.cs.t=0;}
+      if(Math.random()<0.7)wShout(p,['He\'s running, get back to the car!','Back to the car, we\'ll cut him off!','Dispatch, suspect fleeing on foot, we\'re pursuing in the vehicle!'][(Math.random()*3)|0]);}
     else if(S.on){cs.st=wArrester()===p?'arrest':'door';}
     else if(me.car||d>85){cs.st=orphan?'stand':'board';}
     else if(d<7.5&&cs.taserT<=0&&!ME.rag&&me.foot&&p.see&&((WANT.runT||0)>0.15||WANT.t<(cs.taseOK||0))){cs.st='tase';cs.t=0;}
@@ -24697,12 +24721,13 @@ function wCopStep(p,dt,far){const me=wMe(),cs=p.cs,u=p.unit,a=u.a,g=p.g;cs.t+=dt
     else if(WANT.appr!==p){cs.st=cs.door?'door':'stand';}
     else if(dg<1.25&&!ME.rag){WANT.appr=null;wBusted();}}
   else if(st==='leave'){tx=p.x+Math.cos(cs.leaveT||0)*5;tz=p.z-Math.sin(cs.leaveT||0)*5;gait=1;}
-  else if(st==='board'){tx=door.x;tz=door.z;gait=hostile?2:1.2;cs.bT=(cs.bT||0)+dt;const dd=Math.hypot(door.x-p.x,door.z-p.z);if(dd<0.6||(dd<2.5&&cs.bT>4)||cs.bT>12){copBoardStart(p);return;}}
+  else if(st==='board'){tx=door.x;tz=door.z;gait=hostile||cs.ret?2.1:1.2;cs.bT=(cs.bT||0)+dt;const dd=Math.hypot(door.x-p.x,door.z-p.z);if(dd<0.6||(dd<2.5&&cs.bT>4)||cs.bT>12){cs.ret=false;copBoardStart(p);return;}}
   if(st!=='board')cs.bT=0;
   // turning and walking
   let mv=0,mang=null;if(tx!=null){const ddx=tx-p.x,ddz=tz-p.z,dd=Math.hypot(ddx,ddz);if(dd>stopR){mv=gait;let dir=Math.atan2(-ddz,ddx);
       // getting nowhere (a car between him and where he's going): round it, one way then the other
-      if(cs.pgD==null||dd<cs.pgD-0.25){cs.pgD=dd;cs.pgT=0;}else{cs.pgT=(cs.pgT||0)+dt;if(cs.pgT>0.6){cs.pgT=0;cs.pgD=dd;cs.detT=1.0;cs.detS=-(cs.detS||1);}}
+      if(cs.pgD==null||dd<cs.pgD-0.25){cs.pgD=dd;cs.pgT=0;if(!(cs.detT>0))cs.detN=0;}else{cs.pgT=(cs.pgT||0)+dt;if(cs.pgT>0.6){cs.pgT=0;cs.pgD=dd;cs.detT=1.5;cs.detN=(cs.detN||0)+1;
+        if(!cs.detS)cs.detS=Math.random()<0.5?1:-1;else if(cs.detN>=3){cs.detS=-cs.detS;cs.detN=0;}}}
       if(cs.detT>0){cs.detT-=dt;dir+=cs.detS*1.25;}
       if(cs.strafe&&st==='cover'){mang=dir;}else face=aim&&dd<3&&!(cs.detT>0)?face:dir;}else{cs.pgD=null;cs.detT=0;}}else{cs.pgD=null;cs.detT=0;}
   if(st!=='cover'){cs.strafe=false;cs.mov=false;}
@@ -24740,6 +24765,9 @@ function wCoverSpot(p,me){let best=null,bd=16;for(const o of [...TR.cars(),...CA
   return best;}
 // the side of his own car away from the suspect: past the end of the car (trunk or hood) if the suspect is beyond the
 // other end, beside it if he's off to one side
+// a cover spot still covers while the car is between it and the suspect (roughly in line)
+function wCovStill(c,a,own,me){if(!a||!a.alive)return false;const ax=a.x-c.x,az=a.z-c.z,mx=me.x-c.x,mz=me.z-c.z,la=Math.hypot(ax,az),lm=Math.hypot(mx,mz);
+  if(la>4.5||lm<la)return false;return (ax*mx+az*mz)/(la*lm||1)>0.55;}
 function wCoverSpotCar(a,me,seat){const q=toCar(a,me.x,me.z),n=Math.hypot(q.f,q.l)||1,df=-q.f/n,dl=-q.l/n,hl=(a.halfLen||2.4),hw=(a.halfWid||0.95);
   // (the two of a crew a step apart along that side, not on the same spot)
   const s=Math.min(Math.abs(df)>1e-3?hl/Math.abs(df):1e9,Math.abs(dl)>1e-3?hw/Math.abs(dl):1e9)+0.7,k=seat==='driver'?0.8:seat==='passenger'?-0.8:0;const w=fromCar(a,{f:df*s-dl*k,l:dl*s+df*k});return insideBuilding(w.x,w.z)?null:w;}
@@ -25146,6 +25174,8 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Police on foot stay near their car: chasing a runner, they go only so far (about 35 m) before running back to the car together and coming after you in it',
+    'Police gunfights move naturally: officers hold their cover instead of hopping from end to end of the car, run to cover that is far and back or side-step to near cover with the gun up, flankers move to a spot then hold it and shoot; anyone stepping sideways or backwards now turns their hips into the step or backpedals, instead of sliding',
     'Performance overhaul: the same world in about 40% fewer draw calls (around 2,200 down to 1,200-1,400 a frame downtown, shadows included), with nothing taken out and nothing drawn worse',
     'Transforms are only worked out for what moved, and hidden things (stand-in cars, spare cars, merged-away parts) are skipped: that work is down 80-90% a frame; far less garbage made each frame, so fewer hitches',
     'Near trees are drawn per kind for all of them at once; small city pieces, traffic lights and far terrain are drawn joined; traffic cars draw their plain parts together, each keeping its exact colour, roughness and shine; the minimap only repaints when it has moved',
@@ -25945,7 +25975,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={_pol:()=>({WANT,WCOPS,wStars,crime,wMe,wCrewOut,units:()=>TR.pd.units(),PLAYER}),scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
