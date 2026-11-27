@@ -9164,6 +9164,7 @@ function polFlareStep(a,dark,near){const L=a.led,pts=L.fl,show=a.led.im.visible&
   A.needsUpdate=true;S.needsUpdate=true;}
 function polLights(a){const u=a.unit||a.ghostUnit,L=a.lensM||{},dark=polDark();
   const near=Math.hypot(a.x-camera.position.x,a.z-camera.position.z);
+  if(a.tpl&&a.tpl.em){emLights(a,u,dark,near,camera,renderer,true);return;}
   let lvB=0,lvR=0,lvW=0;
   if(u&&u.lights){if(!a.led&&a.led!==false)a.led=polLedBuild(a)||false;
     const [pn,t]=polPattern(u),f=PAT[pn];
@@ -9472,6 +9473,228 @@ function taxiDress(A){const bp=A.bp,shell=A.shell,C=bp.C;
     if(cuts.length>=3){word('TAXI',cuts[1]+3,cuts[0]-3,yc-hh/2-4.2,yc-hh/2-0.6,100);word('CAB 2417',cuts[2]+2.5,cuts[1]-2.5,yc-hh/2-3.2,yc-hh/2-0.8,78);}});}
 
 /* trBuildTemplate from the game, minus the traffic stand-in and repaint tables */
+/* ======================= Bayshore PD emergency lighting =======================
+   Every cruiser carries the department's one LED package, fitted to each body by casting rays at the finished model:
+   the roof bar (10 front heads with 2 white takedowns in the middle, 8 rear, 1 at each end), 4 grille heads, the 2
+   push-bar heads, 2 front and 2 rear bumper heads, a 4-head rear-deck bar inside the back glass, a 4-head visor bar
+   inside the windshield, 4 side heads on the fenders and quarters, a head on each mirror and 4 hideaways in the head
+   and tail lamps: 48 modules, each its own little LED array, all of a car drawn in one mesh (plus one for each mirror,
+   which ride on the doors) with one shader. The pattern engine drives every module separately. The light they throw
+   on the world is 6 directional emitters per car (front, rear and each side, each its own colour and strength, aimed
+   the way those heads face) in every lit material. */
+const EM_N=48,EM_COL={b:[0.05,0.24,1.0],r:[1.0,0.03,0.012],w:[1.0,0.96,0.9]},EM_FCOL={b:[0.1,0.3,1.0],r:[1.0,0.08,0.04],w:[1,0.97,0.94]};
+const EM_PW={BF:1,BR:1,BE:0.8,GR:0.55,PB:0.6,FB:0.5,RB:0.5,DK:0.7,VS:0.7,SD:0.5,MR:0.35,HF:0.5,HR:0.45};
+let EM_MAT=null,EM_HOUS=null,EM_FLM=null;
+function emMaterial(){if(EM_MAT)return EM_MAT;
+  EM_MAT=new TH.ShaderMaterial({uniforms:{uI:{value:new Array(EM_N).fill(0)},uGain:{value:7},uOff:{value:1}},transparent:true,depthWrite:true,
+    vertexShader:'attribute vec4 emA;attribute vec4 emC;uniform float uI['+EM_N+'];varying vec2 vUv;varying vec4 vC;varying vec4 vA;varying float vI;varying vec3 vN;varying vec3 vV;\n'+
+      'void main(){vUv=uv;vC=emC;vA=emA;vI=uI[int(emA.x+0.5)];vec4 mv=modelViewMatrix*vec4(position,1.0);vN=normalize(normalMatrix*normal);vV=-mv.xyz;gl_Position=projectionMatrix*mv;}',
+    fragmentShader:'uniform float uGain;uniform float uOff;varying vec2 vUv;varying vec4 vC;varying vec4 vA;varying float vI;varying vec3 vN;varying vec3 vV;\n'+
+      'void main(){vec2 G=vA.yz;vec2 g=vUv*G;float asp=vA.w;vec2 c=fract(g)-0.5;\n'+
+      // one LED die in a chrome reflector cup per cell, resolved to their average when the cells get smaller than a few pixels
+      '  float rn=length(vec2(c.x*asp,c.y))/(0.5*min(asp,1.0));float px=max(fwidth(g.x),fwidth(g.y));float fa=smoothstep(0.22,0.55,px);\n'+
+      '  float die=mix(1.0-smoothstep(0.30,0.58,rn),0.32,fa);float cup=mix(1.0-smoothstep(0.62,1.0,rn),0.78,fa);\n'+
+      '  vec2 e=min(vUv,1.0-vUv)*G;float fm=mix(smoothstep(0.0,0.09,min(e.x,e.y)),1.0,fa*0.7);\n'+
+      '  vec3 N=normalize(vN),V=normalize(vV);float ndv=max(dot(N,V),0.0);float beam=0.16+0.84*pow(ndv,0.85);\n'+
+      '  float I=vI*vC.w;vec3 col=vC.rgb;vec3 hot=mix(col,vec3(1.0),0.28*die*min(I,1.0));\n'+
+      '  vec3 lit=(col*(0.07+cup*0.22)+hot*die)*I*beam*uGain*fm;\n'+
+      // switched off: a clear lens over dark optics, silvered cups catching what light there is
+      '  vec3 off=(vec3(0.035)+col*0.02)*(0.3+0.7*cup)*(0.55+0.45*pow(1.0-ndv,2.0))*uOff*fm*mix(0.35,1.0,step(0.99,vC.w));\n'+
+      '  gl_FragColor=vec4(off+lit,1.0);\n#include <tonemapping_fragment>\n#include <encodings_fragment>\n}'});
+  EM_MAT.extensions={derivatives:true};
+  window.BAY_EMU=EM_MAT.uniforms;
+  return EM_MAT;}
+function emFlareMat(){if(EM_FLM)return EM_FLM;
+  EM_FLM=new TH.ShaderMaterial({uniforms:{uScale:{value:400}},transparent:true,depthWrite:false,blending:TH.AdditiveBlending,
+    vertexShader:'attribute vec3 col;attribute float al;attribute float sz;varying vec3 vC;varying float vA;uniform float uScale;'+
+      'void main(){vec4 mv=modelViewMatrix*vec4(position,1.0);gl_Position=projectionMatrix*mv;vC=col;vA=al;'+
+      'float px=sz*uScale/max(0.1,-mv.z);gl_PointSize=al>0.002?clamp(px,2.0,160.0):0.0;}',
+    fragmentShader:'varying vec3 vC;varying float vA;void main(){vec2 c=gl_PointCoord-0.5;float r=length(c)*2.0;if(r>1.0)discard;'+
+      'float core=exp(-r*r*48.0),halo=exp(-r*r*9.0)*(1.0-r);vec3 o=vC*halo*0.8+mix(vC,vec3(1.0),0.45)*core*1.2;gl_FragColor=vec4(o*vA,1.0);}'});
+  return EM_FLM;}
+function emMatBox(root,mat,keep){root.updateMatrixWorld(true);const b=new TH.Box3(),v=new TH.Vector3();let n=0;
+  root.traverse(o=>{if(!o.isMesh||!o.geometry||!o.geometry.attributes.position)return;const same=m=>m===mat||(m&&m.color&&mat.color&&m.color.getHex()===mat.color.getHex());
+    const ms=Array.isArray(o.material)?o.material:[o.material];if(!ms.some(same))return;
+    const g=o.geometry,P=g.attributes.position,I=g.index,grs=Array.isArray(o.material)&&g.groups.length?g.groups.filter(q=>same(ms[q.materialIndex])):[{start:0,count:I?I.count:P.count}];
+    for(const q of grs)for(let k=q.start;k<q.start+q.count;k++){const vi=I?I.getX(k):k;v.fromBufferAttribute(P,vi).applyMatrix4(o.matrixWorld);if(keep&&!keep(v))continue;b.expandByPoint(v);n++;}});
+  return n?b:null;}
+
+/* fit the package to a finished cruiser (buildCruiser: A the car, T its template, root the car in metres, parts its
+   opening panels, pb the push-bar heads). Car frame: +x forward, +y up, -z the driver's (left) side. */
+function emBuild(A,T,root,parts,pb){
+  root.updateMatrixWorld(true);const V=(x,y,z)=>new TH.Vector3(x,y,z),W=A.wheels||[];
+  const under=(o,L)=>{for(let q=o;q;q=q.parent)if(L.includes(q))return true;return false;};
+  const meshes=[];root.traverse(o=>{if(o.isMesh&&!o.isInstancedMesh&&o.geometry&&o.geometry.attributes.position&&!under(o,W))meshes.push(o);});
+  const rc=new TH.Raycaster(),mt=h=>Array.isArray(h.object.material)?h.object.material[h.face.materialIndex]:h.object.material;
+  // the first surface along a ray that passes the test (hidden parts never; glass only when asked for)
+  const cast=(o,d,ok,glass)=>{rc.set(o,d.clone().normalize());rc.far=9;
+    for(const h of rc.intersectObjects(meshes,false)){const m=mt(h);if(!m||m.visible===false)continue;const gl=!!(m.transparent&&m.opacity<0.97);
+      if(gl&&!glass)continue;if(ok&&!ok(h.point,gl,m))continue;const n=h.face?h.face.normal.clone().transformDirection(h.object.matrixWorld):d.clone().negate();return {p:h.point.clone(),n,gl,m};}
+    return null;};
+  const M=[],sg=z=>z<-0.04?-1:z>0.04?1:0;
+  // a module: its group, colour, centre, facing, size; on: the surface normal it sits on (it follows it when close to its nominal facing)
+  const put=(g,c,h,nom,w,ht,o)=>{if(!h)return null;nom=nom.clone().normalize();let n=nom;if(h.n&&h.n.dot(nom)>0.82)n=h.n.clone().normalize();
+    const p=h.p.clone().addScaledVector(n,(o&&o.lift)||0.003);const d=Object.assign({g,c,p,n,w,ht,inn:1,hous:0},o||{});d.s=c==='w'?0:sg(p.z);M.push(d);return d;};
+  const lens=T.lens||{},LS=[lens.blue,lens.red,lens.clear].filter(Boolean);
+  // every lens-coloured part (the bar's own lens bodies; the model may use copies) back on the template's lens
+  // materials, so each traffic car gets its own copy of them; and those switched off: dark tinted, barely lit
+  root.traverse(o=>{if(!o.isMesh)return;const sw=m=>{if(!m||!m.color||!m.emissive||LS.includes(m))return m;const L=LS.find(l=>l.color.getHex()===m.color.getHex()&&l.emissive.getHex()===m.emissive.getHex());return L||m;};
+    o.material=Array.isArray(o.material)?o.material.map(sw):sw(o.material);});
+  [[lens.blue,0x0b1530,0x0a36ff],[lens.red,0x2e0a0a,0xff1206],[lens.clear,0x2a2a2a,0xffffff]].forEach(([m,c,e])=>{if(m&&!m.userData.emT){m.userData.emT=1;m.color.setHex(c);m.emissive.setHex(e);m.emissiveIntensity=0.03;}});
+  const ry=root.position.y,yb=(T.lbY||1.5)+ry-0.3,xb=T.lbX||0;
+  const inBar=v=>v.y>yb&&Math.abs(v.x-xb)<0.6&&Math.abs(v.z)<0.8;
+  // ---- the roof bar: its front and rear faces split into heads across the lens, and one on each end
+  const BB=new TH.Box3();['blue','red','clear'].forEach(k=>{const b=lens[k]&&emMatBox(root,lens[k],inBar);if(b)BB.union(b);});
+  if(!BB.isEmpty()){const yc=(BB.min.y+BB.max.y)/2,bh=Math.max(0.035,BB.max.y-BB.min.y),z0=BB.min.z,z1=BB.max.z,sp=z1-z0,xc=(BB.min.x+BB.max.x)/2,dx=BB.max.x-BB.min.x;
+    const near=p=>Math.abs(p.x-xc)<dx/2+0.12&&p.y>yb;
+    const face=(n,dir,col)=>{for(let i=0;i<n;i++){const z=z0+sp*(i+0.5)/n,h=cast(V(xc+dir*2,yc,z),V(-dir,0,0),near);
+        put(dir>0?'BF':'BR',col(i),h||{p:V(dir>0?BB.max.x:BB.min.x,yc,z),n:V(dir,0,0)},V(dir,0,0),sp/n*0.86,bh*0.58,{bar:1});}};
+    face(10,1,i=>i<4?'b':i<6?'w':'r');face(8,-1,i=>i<4?'b':'r');
+    [-1,1].forEach(s=>{const h=cast(V(xc,yc,s*2),V(0,0,-s),near);put('BE',s<0?'b':'r',h||{p:V(xc,yc,s<0?z0:z1),n:V(0,0,s)},V(0,0,s),dx*0.62,bh*0.58,{bar:1});});
+    T.emBar={x:xc,y:yc,z0,z1};}
+  const F=T.lampF,R=T.lampR;
+  // ---- grille: four heads between the headlamps (the push bar in front of them is looked through)
+  const grille=p=>p.x<=F.x+0.1&&p.x>F.x-0.55;
+  [-0.4,-0.24,0.24,0.4].forEach(z=>{const zz=z*Math.min(1,F.z/0.9);let h=cast(V(F.x+2,F.y-0.03,zz),V(-1,0,0),(p,gl,m)=>grille(p)&&m!==A.head);
+    put('GR',z<0?'b':'r',h,V(1,0,0),0.115,0.034,{hous:0.016});});
+  // ---- push-bar heads: in the bar's own housings, in place of their plain faces
+  (pb||[]).forEach(q=>{const f=q.f;if(!f)return;f.updateMatrixWorld(true);const P=new TH.Vector3().setFromMatrixPosition(f.matrixWorld),G=f.geometry.parameters||{};
+    put('PB',q.c,{p:P.add(V(0.002,0,0)),n:V(1,0,0)},V(1,0,0),(G.depth||0.1)*0.98,(G.height||0.04)*1.0,{lift:0.0});if(f.parent)f.parent.remove(f);q.f=null;});
+  // ---- bumpers: a head in each corner, front and rear
+  [-1,1].forEach(s=>{const z=s*Math.max(0.45,F.z-0.32);put('FB',s<0?'b':'r',cast(V(F.x+2,F.y-0.27,z),V(-1,0,0),p=>p.x>F.x-0.45),V(1,0,0),0.13,0.03,{hous:0.016});});
+  [-1,1].forEach(s=>{const z=s*Math.max(0.42,R.z-0.38);put('RB',s<0?'b':'r',cast(V(R.x-2,R.y-0.3,z),V(1,0,0),p=>p.x<R.x+0.45),V(-1,0,0),0.13,0.03,{hous:0.016});});
+  // ---- glass: the back window's bottom edge and the windshield's top edge, found by walking rays up and down
+  const glassEdge=(dir,y0,y1,st)=>{const R=[];for(const zz of [-0.3,0.3]){for(let y=y0;st>0?y<=y1:y>=y1;y+=st){const h=cast(V(-dir*3,y,zz),V(dir,0,0),null,true);
+      if(h&&h.gl&&(dir>0?h.p.x<-0.6:h.p.x>0.3)){R.push(h.p);break;}}}
+    return R.length?{x:R.reduce((q,p)=>q+p.x,0)/R.length,y:R.reduce((q,p)=>q+p.y,0)/R.length}:null;};
+  // rear deck: on the parcel shelf, against the bottom of the back glass
+  const rg=glassEdge(1,0.95,1.75,0.02);
+  if(rg)[-0.42,-0.2,0.2,0.42].forEach(z=>{const h={p:V(rg.x+0.1,rg.y+0.045,z),n:V(-1,0.2,0)};put('DK',z<0?'b':'r',h,V(-1,0.2,0),0.19,0.045,{hous:0.05,inn:0.62,lift:0});});
+  // visor: up under the headliner, behind the top of the windshield
+  const wg=glassEdge(-1,1.75,0.95,-0.02);
+  if(wg)[-0.36,-0.16,0.16,0.36].forEach(z=>{const h={p:V(wg.x-0.14,wg.y-0.075,z),n:V(1,-0.06,0)};put('VS',z<0?'b':'r',h,V(1,-0.06,0),0.16,0.04,{hous:0.045,inn:0.85,lift:0});});
+  // ---- sides: ahead of the front wheels and behind the rear ones
+  [-1,1].forEach(s=>{[[T.axF+0.47,0.66],[T.axR-0.5,0.8]].forEach(([x,y])=>{const h=cast(V(x,y,s*3),V(0,0,-s),p=>Math.abs(p.z)>0.5);put('SD',s<0?'b':'r',h,V(0,0,s),0.16,0.038,{hous:0.014});});});
+  // ---- mirrors: the outermost thing between the A-pillar and the front wheels at window height
+  const bodyW=(()=>{let w=0;[-1,1].forEach(s=>{const h=cast(V(0,0.75,s*3),V(0,0,-s));if(h)w=Math.max(w,Math.abs(h.p.z));});return w||T.wid||0.95;})();
+  const mirrors={};
+  [-1,1].forEach(s=>{const pts=[];for(let x=0.15;x<=1.5;x+=0.025)for(let y=0.8;y<=1.3;y+=0.025){const h=cast(V(x,y,s*3),V(0,0,-s),p=>Math.abs(p.z)>bodyW+0.04&&p.y>0.75);if(h)pts.push(h.p);}
+    if(pts.length<3)return;const zo=Math.max(...pts.map(p=>Math.abs(p.z))),y0=Math.min(...pts.map(p=>p.y)),y1=Math.max(...pts.map(p=>p.y)),ym=(y0+y1)/2;
+    const h=cast(V(3,ym,s*(zo-0.03)),V(-1,0,0),p=>Math.abs(p.z)>bodyW+0.01);if(!h)return;
+    const d=put('MR',s<0?'b':'r',h,V(1,0,s*0.45),Math.min(0.075,Math.max(0.03,(zo-bodyW)*0.55)),Math.min(0.03,Math.max(0.014,(y1-y0)*0.35)),{lift:0.004});if(d)mirrors[s]=d;});
+  // ---- hideaways inside the head and tail lamps
+  [-1,1].forEach(s=>{put('HF','w',cast(V(F.x+2,F.y,s*(F.z-0.14)),V(-1,0,0),p=>p.x>F.x-0.3),V(1,0,0),0.05,0.028);
+    const h=cast(V(R.x-2,R.y,s*(R.z-0.16)),V(1,0,0),p=>p.x<R.x+0.3);put('HR',s<0?'b':'r',h,V(-1,0,0),0.05,0.028);});
+  // ---- each module's place in its group: across the car (u: -1 left .. 1 right) and from the middle out (rank)
+  const byG={};M.forEach(d=>(byG[d.g]||(byG[d.g]=[])).push(d));
+  for(const g in byG){const L=byG[g],za=Math.max(0.01,...L.map(d=>Math.abs(d.p.z)));L.forEach(d=>{d.u=d.p.z/za;});
+    [-1,0,1].forEach(s=>{const S=L.filter(d=>d.s===s).sort((a,b)=>Math.abs(a.p.z)-Math.abs(b.p.z));S.forEach((d,i)=>{d.rank=i;d.nS=S.length;});});}
+  M.forEach((d,i)=>{d.i=i;d.pw=EM_PW[d.g]||0.5;d.f=Math.abs(d.n.x)>0.55?Math.sign(d.n.x):0;});
+  // ---- the six emitters that light the world, and how much of each module goes to each
+  let xf=-9,xr=9,zs=0;M.forEach(d=>{if(d.f>0)xf=Math.max(xf,d.p.x);if(d.f<0)xr=Math.min(xr,d.p.x);zs=Math.max(zs,Math.abs(d.p.z));});
+  const E=[{p:[xf+0.2,1.05,-0.45],d:[1,-0.24,-0.34],c0:-0.12},{p:[xf+0.2,1.05,0.45],d:[1,-0.24,0.34],c0:-0.12},
+           {p:[xr-0.2,1.05,-0.45],d:[-1,-0.24,-0.34],c0:-0.12},{p:[xr-0.2,1.05,0.45],d:[-1,-0.24,0.34],c0:-0.12},
+           {p:[-0.1,1.0,-(zs+0.2)],d:[0,-0.28,-1],c0:-0.18},{p:[-0.1,1.0,zs+0.2],d:[0,-0.28,1],c0:-0.18}];
+  E.forEach(e=>{const l=Math.hypot(...e.d);e.d=e.d.map(v=>v/l);});
+  M.forEach(d=>{const w=d.pw,L=[];const fr=d.f>0?0:d.f<0?2:-1;
+    if(fr>=0){if(d.s<=0)L.push([fr,d.s?w:w/2]);if(d.s>=0)L.push([fr+1,d.s?w:w/2]);if(d.bar&&d.s)L.push([d.s<0?4:5,w*0.25]);}
+    else{L.push([d.s<0?4:5,w]);if(d.g==='MR')L.push([d.s<0?0:1,w*0.3]);}
+    d.to=L;});
+  const wsum=new Float32Array(6);M.forEach(d=>d.to.forEach(([k,w])=>{wsum[k]+=w;}));
+  // ---- the meshes: LED faces (one shader for the lot) and the dark housings of the heads mounted on the body
+  const mat=emMaterial();if(!EM_HOUS)EM_HOUS=new TH.MeshStandardMaterial({color:0x08090b,roughness:0.42,metalness:0.35});
+  const lists=new Map(),hous=[];const lst=par=>{let L=lists.get(par);if(!L)lists.set(par,L={P:[],N:[],U:[],A:[],C:[],I:[]});return L;};
+  const up=V(0,1,0),t=V(),b=V(),q=V(),inv=new TH.Matrix4();
+  M.forEach(d=>{const n=d.n;b.copy(Math.abs(n.y)>0.9?V(1,0,0):up).addScaledVector(n,-(Math.abs(n.y)>0.9?n.x:n.y)).normalize();t.crossVectors(b,n).normalize();
+    let par=A.shell;if(d.g==='MR'){const P=(parts||[]).find(p=>p.kind==='door'&&p.front&&p.s===d.s);if(P&&P.pivot)par=P.pivot;}
+    const L=lst(par),k0=L.P.length/3,cols=Math.max(2,Math.min(9,Math.round(d.w/0.024))),rows=Math.max(1,Math.min(3,Math.round(d.ht/0.026))),asp=(d.w/cols)/(d.ht/rows);
+    [[-1,-1,0,0],[1,-1,1,0],[1,1,1,1],[-1,1,0,1]].forEach(([a,c,u,v])=>{q.copy(d.p).addScaledVector(t,a*d.w/2).addScaledVector(b,c*d.ht/2);L.P.push(q.x,q.y,q.z);L.N.push(n.x,n.y,n.z);L.U.push(u,v);
+      L.A.push(d.i,cols,rows,asp);const C=EM_COL[d.c];L.C.push(C[0],C[1],C[2],d.inn);});
+    L.I.push(k0,k0+1,k0+2,k0,k0+2,k0+3);
+    if(d.hous){const g=new TH.BoxGeometry(d.w+0.014,d.ht+0.012,d.hous),m4=new TH.Matrix4().makeBasis(t,b,n).setPosition(q.copy(d.p).addScaledVector(n,-d.hous/2-0.0005));g.applyMatrix4(m4);hous.push(g);}});
+  const toLocal=(L,par)=>{par.updateMatrixWorld(true);inv.copy(par.matrixWorld).invert();const nm=new TH.Matrix3().getNormalMatrix(inv);
+    for(let i=0;i<L.P.length;i+=3){q.set(L.P[i],L.P[i+1],L.P[i+2]).applyMatrix4(inv);L.P[i]=q.x;L.P[i+1]=q.y;L.P[i+2]=q.z;q.set(L.N[i],L.N[i+1],L.N[i+2]).applyMatrix3(nm).normalize();L.N[i]=q.x;L.N[i+1]=q.y;L.N[i+2]=q.z;}};
+  const meshesOut=[];
+  lists.forEach((L,par)=>{toLocal(L,par);const g=new TH.BufferGeometry();g.setAttribute('position',new TH.Float32BufferAttribute(L.P,3));g.setAttribute('normal',new TH.Float32BufferAttribute(L.N,3));
+    g.setAttribute('uv',new TH.Float32BufferAttribute(L.U,2));g.setAttribute('emA',new TH.Float32BufferAttribute(L.A,4));g.setAttribute('emC',new TH.Float32BufferAttribute(L.C,4));g.setIndex(L.I);g.computeBoundingSphere();
+    const m=new TH.Mesh(g,mat);m.userData.keep=true;m.userData.noProxy=true;m.userData.em=true;m.renderOrder=3;m.castShadow=false;m.receiveShadow=false;par.add(m);meshesOut.push(m);});
+  if(hous.length){const P=[],N=[];hous.forEach(g=>{const G=g.toNonIndexed();const p=G.attributes.position.array,nn=G.attributes.normal.array;for(let i=0;i<p.length;i++){P.push(p[i]);N.push(nn[i]);}G.dispose();g.dispose();});
+    const L={P,N};toLocal(L,A.shell);const g=new TH.BufferGeometry();g.setAttribute('position',new TH.Float32BufferAttribute(L.P,3));g.setAttribute('normal',new TH.Float32BufferAttribute(L.N,3));
+    g.setAttribute('uv',new TH.Float32BufferAttribute(new Float32Array(L.P.length/3*2),2));g.computeBoundingSphere();
+    const m=new TH.Mesh(g,EM_HOUS);m.userData.keep=true;m.userData.noProxy=true;m.userData.em=true;m.castShadow=false;A.shell.add(m);meshesOut.push(m);}
+  // the push-bar housings ride with the body like everything else
+  root.children.slice().forEach(o=>{if(o.isMesh&&o.geometry&&o.geometry.type==='BoxGeometry'&&o.material&&o.material.isMeshStandardMaterial&&o.material.color.getHex()===0x101113){A.shell.attach(o);o.userData.keep=true;}});
+  const mods=M.map(d=>({i:d.i,g:d.g,c:d.c,s:d.s,u:d.u,rank:d.rank,nS:d.nS,f:d.f,pw:d.pw,inn:d.inn,to:d.to,p:[d.p.x,d.p.y,d.p.z],n:[d.n.x,d.n.y,d.n.z]}));
+  T.em={mods,E,wsum,mat,meshes:meshesOut,bodyW,n:mods.length};
+  return T.em;}
+
+/* ---- the pattern engine. Every module asks the car's current pattern whether it is lit at time t; a frame's
+   brightness is the share of the frame it was lit for (four samples across the frame), so short flashes never
+   strobe-alias at a low frame rate. A car moves through the department's six run patterns (about 5 s each, each car
+   from its own place in the cycle); stopped at a scene it holds the calmer park pattern (front heads dimmed, white
+   takedowns off, the rear and sides still working traffic). ---- */
+const EM_SEQ=['wig','sweep','rapid','cout','split','oin'];
+const emTri=(t,per,n,duty)=>{const h=per/2,l=((t%per)+per)%per,a=l<h,k=(l%h)/h*(n+0.6);return [a,k<n&&(k%1)<duty];};
+const emPing=(t,per)=>{const x=((t%per)+per)%per/per;return x<0.5?x*2:2-x*2;};
+const EM_LAT={BF:1,BR:1,VS:1,DK:1,GR:1};
+function emOn(P,d,t){const lat=EM_LAT[d.g],rear=d.f<0,W=d.c==='w',L=d.s<0;
+  switch(P){
+    case 'wig':{if(W){const k=((t%0.9)+0.9)%0.9;return (k>0.4&&k<0.45)||(k>0.85)?1:0;}
+      if(lat&&d.g!=='GR'){const [a,on]=emTri(t,0.9,3,0.55);const cross=d.g==='DK'||d.g==='VS';return on&&((L!==cross)?a:!a)?1:0;}
+      if(d.g==='HF'){const [a,on]=emTri(t,0.3,1,0.6);return on&&(L?a:!a)?1:0;}
+      const lo=d.g==='GR'||d.g==='PB'||d.g==='FB'||d.g==='RB'||d.g==='HR';if(lo){const [a,on]=emTri(t+0.11,0.45,2,0.5);return on&&(L?!a:a)?1:0;}
+      const [a,on]=emTri(t,0.9,3,0.55);return on&&(L?a:!a)?1:0;}
+    case 'sweep':{const hd=-1.25+2.5*emPing(t,1.1),hr=rear?-hd:hd;
+      if(W)return Math.abs(hd)<0.22?1:0;
+      if(lat)return Math.abs(d.u-hr)<0.34?1:0;
+      if(d.g==='HF'||d.g==='HR')return ((t%0.16)+0.16)%0.16<0.08&&(L?hr<0:hr>0)?1:0;
+      return (L?hr<-0.1:hr>0.1)&&((t%0.12)+0.12)%0.12<0.075?1:0;}
+    case 'rapid':{const [a,on]=emTri(t,0.36,4,0.5);if(W)return on&&a?1:0;const inv=d.g==='GR'||d.g==='FB'||d.g==='RB'||d.g==='DK';return on&&((L!==inv)?a:!a)?1:0;}
+    case 'cout':case 'oin':{const ph=((t%0.75)+0.75)%0.75/0.75,p=P==='cout'?-0.3+ph*1.75:1.45-ph*1.75,au=Math.abs(d.u);
+      if(W)return p<0.3&&p>-0.15?1:0;
+      if(lat)return au<=p+0.05&&au>p-0.5?1:0;
+      const [a,on]=emTri(t,0.75,2,0.5);return on&&(L?a:!a)?1:0;}
+    case 'split':{const [a,on]=emTri(t,0.8,3,0.55);if(W)return 0;const inner=d.nS>1?d.rank<d.nS/2:true,f=rear?!a:a;return on&&((L===inner)?f:!f)?1:0;}
+    case 'park':{if(W)return 0;const [a,on]=emTri(t,1.5,2,0.42);const front=d.f>0;return on&&(L?a:!a)?(front?0.4:1):0;}}
+  return 0;}
+let _emV=null;
+function emLights(a,u,dark,near,cam,rend,stopAll){const E=a.tpl.em,M=E.mods,n=M.length;
+  if(!a.emI){a.emI=new Float32Array(n);a.emL=new Float32Array(24);let h=0;const id=(u&&u.id)||'B1';for(let i=0;i<id.length;i++)h=(h*31+id.charCodeAt(i))%9973;a.emSeed=h*0.731;a.emT=-1;}
+  const on=!!(u&&u.lights),t=TRAFFIC.t,dt=a.emT<0?1/60:Math.min(0.05,Math.max(0,t-a.emT));a.emT=t;
+  const park=u&&u.st==='stop'&&stopAll,tt=t+a.emSeed,I=a.emI;
+  let nb=0,nr=0,nw=0,cb=0,cr=0,cw=0;
+  for(let i=0;i<n;i++){const d=M[i];let v=0;
+    if(on){for(let k=0;k<4;k++){const ts=tt-dt*(k+0.5)/4,P=park?'park':EM_SEQ[Math.floor(ts/5.2)%EM_SEQ.length];v+=emOn(P,d,ts);}v*=0.25;}
+    I[i]=v;if(d.c==='b'){nb+=v;cb++;}else if(d.c==='r'){nr+=v;cr++;}else{nw+=v;cw++;}}
+  // the light thrown on the world: each emitter's strength (0..1) and colour from the modules feeding it
+  const L=a.emL,ws=E.wsum;L.fill(0);
+  for(let i=0;i<n;i++){const v=I[i];if(!(v>0))continue;const d=M[i],C=EM_COL[d.c];for(const [k,w] of d.to){const q=w*v;L[k*4]+=C[0]*q;L[k*4+1]+=C[1]*q;L[k*4+2]+=C[2]*q;L[k*4+3]+=q;}}
+  for(let k=0;k<6;k++){const s=L[k*4+3];if(s>0){L[k*4]/=s;L[k*4+1]/=s;L[k*4+2]/=s;L[k*4+3]=Math.min(1.6,s/(0.5*(ws[k]||1)));}}
+  // the car's LED faces (drawn up close; farther out the flares carry them)
+  const full=a.full&&a.full.visible&&a.root&&a.root.visible;
+  if(a.emM){const U=a.emM.uniforms.uI.value;for(let i=0;i<n;i++)U[i]=I[i];}
+  // the bar's own lens bodies: a faint glow of the colour lit behind them
+  const Ln=a.lensM||{},lvB=cb?nb/cb:0,lvR=cr?nr/cr:0,lvW=cw?nw/cw:0;
+  if(!Ln._tint){Ln._tint=1;[[Ln.blue,0x0b1530,0x0a36ff],[Ln.red,0x2e0a0a,0xff1206],[Ln.clear,0x2a2a2a,0xffffff]].forEach(([m,c,e])=>{if(m){m.color.setHex(c);if(m.emissive)m.emissive.setHex(e);}});}
+  if(Ln.blue)Ln.blue.emissiveIntensity=0.03+lvB*0.5;if(Ln.red)Ln.red.emissiveIntensity=0.03+lvR*0.5;if(Ln.clear)Ln.clear.emissiveIntensity=0.03+lvW*0.4;
+  a.lbLevel={b:lvB,r:lvR,w:lvW};
+  if(on||a.emFl)emFlareStep(a,I,on,dark,near,full,cam,rend);}
+function emFlareStep(a,I,on,dark,near,full,cam,rend){const M=a.tpl.em.mods,n=M.length;
+  if(!a.emFl){const g=new TH.BufferGeometry(),P=new Float32Array(n*3),C=new Float32Array(n*3);
+    M.forEach((d,i)=>{P[i*3]=d.p[0]+d.n[0]*0.02;P[i*3+1]=d.p[1]+d.n[1]*0.02;P[i*3+2]=d.p[2]+d.n[2]*0.02;C.set(EM_FCOL[d.c],i*3);});
+    g.setAttribute('position',new TH.BufferAttribute(P,3));g.setAttribute('col',new TH.BufferAttribute(C,3));
+    g.setAttribute('al',new TH.BufferAttribute(new Float32Array(n),1));g.setAttribute('sz',new TH.BufferAttribute(new Float32Array(n),1));
+    const pts=new TH.Points(g,emFlareMat());pts.frustumCulled=false;pts.renderOrder=4;a.root.add(pts);a.emFl=pts;}
+  const pts=a.emFl,show=on&&a.alpha>0.3;pts.visible=show;if(!show)return;
+  EM_FLM.uniforms.uScale.value=rend.domElement.height*cam.projectionMatrix.elements[5]*0.5;
+  if(!_emV)_emV=new TH.Vector3();_emV.copy(cam.position);a.root.worldToLocal(_emV);
+  // up close the LED faces and the bloom carry the light, the flares only add a soft halo; far off they are the light
+  const lod=full?Math.min(0.42,Math.max(0.05,(near-10)/90)):1,dayK=0.35+0.65*dark,sz0=(0.2+dark*0.28)*(1+Math.min(1.5,near/150));
+  const A=pts.geometry.attributes.al,S=pts.geometry.attributes.sz;
+  for(let i=0;i<n;i++){const v=I[i];if(!(v>0)){A.array[i]=0;continue;}const d=M[i],dx=_emV.x-d.p[0],dy=_emV.y-d.p[1],dz=_emV.z-d.p[2],m=Math.hypot(dx,dy,dz)||1;
+    const f=Math.max(0,(dx*d.n[0]+dy*d.n[1]+dz*d.n[2])/m);A.array[i]=v*lod*dayK*(0.06+0.94*Math.pow(f,1.4))*(d.inn<1?0.7:1);S.array[i]=sz0*(d.g==='BF'||d.g==='BR'||d.g==='BE'?1:0.72);}
+  A.needsUpdate=true;S.needsUpdate=true;}
+
 function buildCruiser(key,unitText,dep){
   TH=window.THREE;if(!PB_ON){PB_ON={b:new TH.Color(0.1,0.28,1.0),r:new TH.Color(1.0,0.08,0.04)};PB_OFF={b:new TH.Color(0.035,0.05,0.12),r:new TH.Color(0.13,0.025,0.025)};}if(!TR_HIDE)TR_HIDE=new TH.MeshBasicMaterial({visible:false});
   const TM=[['start',performance.now()]],tk=n=>TM.push([n,performance.now()]);
@@ -9529,11 +9752,12 @@ function buildCruiser(key,unitText,dep){
   A.grp.traverse(m=>{if(!m.isMesh)return;const sw=x=>x===LS.blue?LM.blue:x===LS.red?LM.red:x===LS.clear?LM.clear:x;
     m.material=Array.isArray(m.material)?m.material.map(sw):sw(m.material);});
   const a={tpl:T,root,lensM:LM,x:0,z:0,alpha:1,unit:{id:unitText||'S21',dept,st:'patrol',lights:true}};
-  tk('pushbar');a.led=lightsInit().polLedBuild(a)||false;tk('leds');
+  tk('pushbar');a.led=false;tk('leds');
   // sit the tyres on the ground
   root.updateMatrixWorld(true);let minY=Infinity;A.wheels.forEach(w=>{const b=new TH.Box3().setFromObject(w);minY=Math.min(minY,b.min.y);});
   if(isFinite(minY))root.position.y=-minY;
   A.grp.traverse(o=>{if(o.isMesh&&!o.isInstancedMesh){o.castShadow=true;o.receiveShadow=true;}});
+  try{emBuild(A,T,root,parts,pb);}catch(e){console.warn('em build '+key,e);}
   tk('end');
   // where people sit: hip-point markers riding in the shell (driver = left front, z < 0), plus the steering wheel
   const CB=A.bp.CAB||{},seats=(CB.seats||[]).map(si=>({name:si.rear?'rear':(si.z<0?'driver':'passenger'),obj:si.obj,rear:si.rear}));
@@ -10775,7 +10999,7 @@ function trBuildCivTemplate(key,pol){
   const bb=new TH.Box3();A.shell.traverse(m=>{if(m.isMesh&&m.geometry){m.geometry.computeBoundingBox();const b=m.geometry.boundingBox.clone().applyMatrix4(m.matrixWorld);if(b.max.y-b.min.y<2.6)bb.union(b);}});
   A.wheels.forEach(w=>bb.expandByObject(w));
   const sz=bb.getSize(new TH.Vector3());
-  const T={key,phys,police:!!pol,dept:pol?'bayshore':null,lens:pol&&CR.T?CR.T.lens:null,barMats:pol&&CR.T?CR.T.barMats:null,taxi,grp:root,shell:A.shell,wheels:A.wheels,S:A.S,brake:A.brake,head:A.head,paint,parts:A.parts,seats:A.seats,wheelObj:A.wheelObj,wheelR:A.wheelR,bp:A.bp,
+  const T={key,phys,police:!!pol,dept:pol?'bayshore':null,lens:pol&&CR.T?CR.T.lens:null,em:pol&&CR.T?CR.T.em:null,barMats:pol&&CR.T?CR.T.barMats:null,taxi,grp:root,shell:A.shell,wheels:A.wheels,S:A.S,brake:A.brake,head:A.head,paint,parts:A.parts,seats:A.seats,wheelObj:A.wheelObj,wheelR:A.wheelR,bp:A.bp,
     paintFit,halfLen:sz.x/2,halfWid:Math.min(1.0,sz.z/2*0.9),wid:sz.z/2,
     axF:Math.max(...A.wheels.map(w=>w.getWorldPosition(new TH.Vector3()).x)),axR:Math.min(...A.wheels.map(w=>w.getWorldPosition(new TH.Vector3()).x)),
     iShell:inner.children.indexOf(A.shell),iWheels:A.wheels.map(w=>inner.children.indexOf(w))};
@@ -10785,7 +11009,7 @@ function trBuildCivTemplate(key,pol){
   if(T.lampF.z<0.3||T.lampF.z>sz.z/2)T.lampF.z=sz.z/2-0.2;if(T.lampR.z<0.3||T.lampR.z>sz.z/2)T.lampR.z=sz.z/2-0.2;
   if(!TR_HIDE)TR_HIDE=new TH.MeshBasicMaterial({visible:false});
   trSplitAmber({grp:root,shell:A.shell},T);
-  root.traverse(o=>{if(o.isMesh){o.castShadow=true;o.receiveShadow=false;}});
+  root.traverse(o=>{if(o.isMesh){o.castShadow=!o.userData.em;o.receiveShadow=false;}});
   T.proxy=trProxy(root,m=>paint.has(m),A.wheels);
   if(pol){const keep=new Set();const add=v=>{if(!v)return;if(v.isMaterial){keep.add(v);return;}if(Array.isArray(v)){v.forEach(add);return;}if(typeof v==='object')Object.values(v).forEach(add);};add(T.barMats);add(T.lens);add(A.head);add(A.brake);trBakeColors(A.shell,m=>keep.has(m));}
   else{try{if(window.__CARTEST)T.__orig=root.clone(true);trBakeExact(root.children[0],m=>paint.has(m)||m===A.head||m===A.brake);}catch(e){console.warn('car bake '+key,e);}}
@@ -11371,6 +11595,7 @@ function trVisual(a,paintHex){
   const remap=m=>{if(!m)return m;let r=map.get(m);if(r)return r;
     if(pc&&T.paint.has(m)){r=m.clone();const f=T.paint.get(m);r.color.setRGB(clamp(f[0][0]*pc.r+f[0][1],0,1),clamp(f[1][0]*pc.g+f[1][1],0,1),clamp(f[2][0]*pc.b+f[2][1],0,1));mats.push(r);}
     else if(m===T.brake||m===T.head||m===T.ambL||m===T.ambR){r=m.clone();mats.push(r);}
+    else if(T.em&&m===T.em.mat){r=m.clone();r.uniforms.uOff=m.uniforms.uOff;r.uniforms.uGain=m.uniforms.uGain;mats.push(r);a.emM=r;}
     else if(m&&(m===lens.blue||m===lens.red||m===lens.clear)){r=m.clone();mats.push(r);a.lensM[m===lens.blue?'blue':m===lens.red?'red':'clear']=r;}
     else if(unit&&TRAFFIC.unitMats.includes(m))r=unit;
     else r=m;
@@ -14617,7 +14842,16 @@ function pPace(p, dt, now) { if (p.grp && p.grp.kind === 'pair') return p.gait;
 (function(){const N=48;window.BAY_LAMPW=Array.from({length:N},()=>new THREE.Vector4(0,-1e5,0,0));window.BAY_LAMPC=Array.from({length:N},()=>new THREE.Vector3(1,0.85,0.6));
   const SC=THREE.ShaderChunk;SC.lights_pars_begin+='\nuniform vec4 lampW[48];\nuniform vec3 lampC[48];\n';
   SC.lights_fragment_end+='\n#if defined( RE_Direct )\n{ for (int i = 0; i < 48; i++) { vec4 lw = lampW[i]; if (lw.w <= 0.0) continue; vec3 lv = (viewMatrix * vec4(lw.xyz, 1.0)).xyz - geometry.position; float d = length(lv); if (d > 40.0) continue; float a = 1.0 - d / 40.0; a *= a; float nl = saturate(dot(geometry.normal, lv / max(d, 1e-3))); reflectedLight.directDiffuse += nl * a * lw.w * lampC[i] * material.diffuseColor; } }\n#endif\n';
-  ['standard','physical','phong','toon','lambert'].forEach(k=>{const S=THREE.ShaderLib[k];if(S){S.uniforms.lampW={value:window.BAY_LAMPW};S.uniforms.lampC={value:window.BAY_LAMPC};}});})();
+  /* police light bars: 24 directional emitters (6 a car: front, rear and sides). Each its own colour, aimed the way its
+     heads face with a wide lobe, soft inverse-square fall-off windowed to its reach (cut short at a wall in its way),
+     through the material's own diffuse and specular, so paint, glass and the road reflect it like any light. */
+  const NE=24;window.BAY_EMP=Array.from({length:NE},()=>new THREE.Vector4(0,-1e5,0,0));window.BAY_EMD=Array.from({length:NE},()=>new THREE.Vector4(1,0,0,0));window.BAY_EMC=Array.from({length:NE},()=>new THREE.Vector4(1,1,1,20));
+  SC.lights_pars_begin+='\nuniform vec4 emP[24];\nuniform vec4 emD[24];\nuniform vec4 emC[24];\n';
+  SC.lights_fragment_end+='\n#if defined( RE_Direct )\n{ vec3 emW = (vec4(geometry.position, 0.0) * viewMatrix).xyz + cameraPosition; for (int i = 0; i < 24; i++) { vec4 ep = emP[i]; if (ep.w <= 0.0) break; vec4 ec = emC[i]; vec3 lw = ep.xyz - emW; float d = length(lw); if (d > ec.w) continue;'+
+    ' vec4 ed = emD[i]; vec3 Lw = lw / max(d, 1e-3); float lo = clamp((dot(-Lw, ed.xyz) - ed.w) / (1.0 - ed.w), 0.0, 1.0); if (lo <= 0.0) continue;'+
+    ' float x = d / ec.w; float wn = clamp(1.0 - x * x * x * x, 0.0, 1.0); IncidentLight il; il.direction = normalize((viewMatrix * vec4(Lw, 0.0)).xyz); il.visible = true; il.color = ec.rgb * (ep.w * lo * lo * wn * wn / (1.0 + d * d * 0.07));'+
+    ' RE_Direct( il, geometry, material, reflectedLight ); } }\n#endif\n';
+  ['standard','physical','phong','toon','lambert'].forEach(k=>{const S=THREE.ShaderLib[k];if(S){S.uniforms.lampW={value:window.BAY_LAMPW};S.uniforms.lampC={value:window.BAY_LAMPC};S.uniforms.emP={value:window.BAY_EMP};S.uniforms.emD={value:window.BAY_EMD};S.uniforms.emC={value:window.BAY_EMC};}});})();
 /* ===========================================================================
    Bayshore: a city built on the layout of the Roblox reference map, rendered realistically.
    Terrain, water, roads, sidewalks and buildings are all generated here from layout data;
@@ -15372,11 +15606,12 @@ function buildWater() {
   WATER = new TH.ShaderMaterial({
     transparent: true, depthWrite: true,
     uniforms: { time: { value: 0 }, sunDir: { value: new TH.Vector3(0, 1, 0) }, sunCol: { value: new TH.Color(1, 1, 1) }, hTex: { value: hTex }, uOrigin: { value: new TH.Vector2(OX, OZ) },
-      uSize: { value: new TH.Vector2(WD.size[0], WD.size[1]) }, waterY: { value: WATER_Y }, fogColor: { value: fog.color }, fogDensity: { value: fog.density }, skyTop: { value: new TH.Color(0x4a86c8) }, skyHor: { value: new TH.Color(0xc9dcea) }, night: { value: 0 }, tRefl: { value: null }, uRefMat: { value: new TH.Matrix4() }, uReflOn: { value: 0 } },
+      uSize: { value: new TH.Vector2(WD.size[0], WD.size[1]) }, waterY: { value: WATER_Y }, fogColor: { value: fog.color }, fogDensity: { value: fog.density }, emP: { value: window.BAY_EMP || [] }, emD: { value: window.BAY_EMD || [] }, emC: { value: window.BAY_EMC || [] }, skyTop: { value: new TH.Color(0x4a86c8) }, skyHor: { value: new TH.Color(0xc9dcea) }, night: { value: 0 }, tRefl: { value: null }, uRefMat: { value: new TH.Matrix4() }, uReflOn: { value: 0 } },
     vertexShader: `varying vec3 vW; void main(){ vec4 w = modelMatrix*vec4(position,1.0); vW=w.xyz; gl_Position = projectionMatrix*viewMatrix*w; }`,
     fragmentShader: `
 precision highp float;
 varying vec3 vW; uniform float time; uniform vec3 sunDir; uniform vec3 sunCol; uniform sampler2D hTex; uniform vec2 uOrigin; uniform vec2 uSize; uniform float waterY;
+uniform vec4 emP[24]; uniform vec4 emD[24]; uniform vec4 emC[24];
 uniform vec3 fogColor; uniform float fogDensity; uniform vec3 skyTop; uniform vec3 skyHor; uniform float night; uniform sampler2D tRefl; uniform mat4 uRefMat; uniform float uReflOn;
 float hash(vec2 p){ p = mod(p, 512.0); vec3 q = fract(vec3(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
 float vnoise(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.0-2.0*f); return mix(mix(hash(i),hash(i+vec2(1,0)),f.x), mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x), f.y); }
@@ -15427,6 +15662,10 @@ void main(){
   vec3 c = mix(body, refl, clamp(fres*1.1,0.0,1.0));
   float spec = pow(max(dot(Rf, normalize(sunDir)),0.0), 600.0)*6.0 + pow(max(dot(Rf, normalize(sunDir)),0.0), 60.0)*0.25;
   c += sunCol*spec*(1.0-night*0.7)*(1.0-0.5*uReflOn);
+  // police light bars near the water: their glints stretched over the waves
+  for (int i = 0; i < 24; i++) { vec4 ep = emP[i]; if (ep.w <= 0.0) break; vec3 lv = ep.xyz - vW; float d = length(lv); vec4 ec = emC[i]; if (d > ec.w * 1.5) continue; vec3 L = lv / max(d, 1e-3); vec4 ed = emD[i];
+    float lo = clamp((dot(-L, ed.xyz) - ed.w) / (1.0 - ed.w), 0.0, 1.0); float rl = max(dot(Rf, L), 0.0); float x = d / (ec.w * 1.5); float wn = clamp(1.0 - x * x, 0.0, 1.0);
+    c += ec.rgb * ep.w * lo * wn * ((pow(rl, 140.0) * 2.5 + pow(rl, 18.0) * 0.18) * (0.4 + 2.4 * fres) + 0.01 * max(L.y, 0.0)) / (1.0 + d * d * 0.04); }
   // shoreline foam: thin, broken, moving
   float fn = vnoise(vW.xz*0.7 + vec2(time*0.4, 0.0))*0.6 + vnoise(vW.xz*2.1 - time*0.3)*0.4;
   float foam = smoothstep(0.55, 0.0, depth) * smoothstep(0.35, 0.75, fn + 0.25*sin(depth*9.0 - time*1.6));
@@ -25151,6 +25390,22 @@ function staminaStep(dt){const me=ME.it&&!ME.car&&!ME.rag&&!ME.dead;const {f,r,r
 
 /* ---------------------------------------------------------------- light bars, the light they throw, sirens */
 const SIREN={v:[],master:null};
+/* the police bars' light on the world: the nearest cars with their lights on (in view first), six emitters each, into
+   the 24 slots every lit material reads. Each emitter's reach stops at the first building in its way. */
+const _emF=new THREE.Vector3();
+function emReach(x,y,z,dx,dz,R){const H=OCCH;if(!H.hf)return R;const l=Math.hypot(dx,dz);if(l<0.2)return R;dx/=l;dz/=l;
+  for(let s=2;s<R;s+=2){const i=Math.floor((x+dx*s-H.x0)/H.c),j=Math.floor((z+dz*s-H.z0)/H.c);if(i<0||j<0||i>=H.nx||j>=H.nz)break;if(H.hf[j*H.nx+i]>y+0.3)return Math.max(5,s+2.5);}
+  return R;}
+function emWorld(near,dark){const P=window.BAY_EMP,D=window.BAY_EMD,C=window.BAY_EMC;if(!P)return;let n=0;
+  const kE=1.2+dark*5.6,U=window.BAY_EMU;if(U){U.uGain.value=15-dark*10;U.uOff.value=0.12+(1-dark)*0.88;}
+  const cp=camera.position,cf=camera.getWorldDirection(_emF);
+  const L=near.map(q=>{const a=q[1],dx=a.x-cp.x,dz=a.z-cp.z;return [q[0]*((dx*cf.x+dz*cf.z)>-12?1:1.8),a,q[0]];}).sort((p,q)=>p[0]-q[0]);
+  for(const [,a,dc] of L){if(n>=P.length)break;const E=a.tpl&&a.tpl.em,Lv=a.emL;if(!E||!Lv)continue;const fd=Math.min(1,Math.max(0,(165-dc)/45));if(fd<=0)continue;
+    const c=Math.cos(a.psi),s=Math.sin(a.psi),y0=a.y||0;
+    for(let k=0;k<6&&n<P.length;k++){const I=Lv[k*4+3];if(!(I>0.004))continue;const e=E.E[k];
+      const wx=a.x+e.p[0]*c+e.p[2]*s,wy=y0+e.p[1],wz=a.z-e.p[0]*s+e.p[2]*c,dx=e.d[0]*c+e.d[2]*s,dz=-e.d[0]*s+e.d[2]*c;
+      P[n].set(wx,wy,wz,I*kE*fd);D[n].set(dx,e.d[1],dz,e.c0);C[n].set(Lv[k*4],Lv[k*4+1],Lv[k*4+2],emReach(wx,wy,wz,dx,dz,24));n++;}}
+  for(let i=n;i<P.length;i++)P[i].w=0;window.BAY_EMT=performance.now();}
 function wLights(dt){const cam=camera,dark=wDark(),E=window.BAY_EMERG||(window.BAY_EMERG=[]);E.length=0;const sir=[],near=[];
   for(const u of TR.pd.units()){const a=u.a;if(!a.alive)continue;const P=a.pd,on=!!(P&&P.lights);
     const dc=Math.hypot(a.x-cam.position.x,a.z-cam.position.z);let lv=null;
@@ -25159,9 +25414,7 @@ function wLights(dt){const cam=camera,dark=wDark(),E=window.BAY_EMERG||(window.B
   // online: the others' police cars, their bars and sirens as their games have them
   for(const a of (window.BAY_NETCOPS||[])){if(!a.alive)continue;const on=!!a.netL,dc=Math.hypot(a.x-cam.position.x,a.z-cam.position.z);let lv=null;
     if((on||a._lon)&&dc<800){try{lv=TR.remoteCar.lights(a,on,cam,renderer,Math.max(0.12,dark));}catch(e){}a._lon=on;}if(on&&a.netS)sir.push(a);if(on&&lv&&dc<170)near.push([dc,a,lv]);}
-  near.sort((p,q)=>p[0]-q[0]);const kI=0.8+dark*2.8;
-  for(const [,a,lv] of near.slice(0,4)){const c=Math.cos(a.psi),s=Math.sin(a.psi),y=(a.y||0)+1.85;
-    E.push({x:a.x-s*0.5,y,z:a.z-c*0.5,r:0.18,g:0.32,b:1,w:kI*(lv.b||0)});E.push({x:a.x+s*0.5,y,z:a.z+c*0.5,r:1,g:0.12,b:0.06,w:kI*(lv.r||0)});}
+  near.sort((p,q)=>p[0]-q[0]);emWorld(near,dark);
   TR.pd.sirens(TR.pd.units().map(u=>u.a).filter(a=>a.alive&&a.pd&&a.pd.lights&&a.pd.role!=='dead'&&a.pd.role!=='hold').concat((window.BAY_NETCOPS||[]).filter(a=>a.alive&&a.netS)));sirenAudio(sir,dt);}
 function sirenVoice(){const c=DAC;const o1=c.createOscillator(),o2=c.createOscillator(),sh=c.createWaveShaper(),bp=c.createBiquadFilter(),g=c.createGain(),pan=c.createPanner();
   o1.type='sawtooth';o2.type='square';const cv=new Float32Array(256);for(let i=0;i<256;i++){const x=i/128-1;cv[i]=Math.tanh(x*2.2);}sh.curve=cv;
@@ -25449,6 +25702,10 @@ TRPAR.run=function(B,h){const T=TRPAR,t0=performance.now();
 // newest first; the top entry is what the "updated" card lists
 const CHANGELOG=[
   {title:'What\'s new',notes:[
+    'Police lights overhaul: every Bayshore PD cruiser carries the same full LED package, fitted to each model: the roof bar (front, rear and end heads, white takedowns in the middle), four grille heads, the push-bar heads, front and rear bumper heads, a deck bar inside the back glass, a visor bar inside the windshield, side heads front and rear, a head on each mirror and hideaways in the head and tail lamps. Each head is a row of individual LEDs, dark behind a clear lens when off',
+    'Real light patterns: triple-flash wig-wag, sweeps left to right and back, rapid quad flash, centre-out, outside-in and split, every group of heads on its own phase and each car on its own timing; parked at a scene a car switches to a calmer pattern with the front dimmed and the rear and sides working traffic',
+    'The lights light the world: each car throws its red and blue separately from its front, rear and sides, so the driver side washes blue and the passenger side red instead of everything turning purple. The road, sidewalks, walls, parked cars, trees and people all catch it and fade with distance, paint, glass and the road show its reflections, it stops at the first building in its way, and it glints on the water',
+    'The bars look right at any hour: crisp coloured heads in sunshine, a stronger glow at dusk, and at night bright heads with bloom (dimmed a little, as real bars do at night) and a vivid wash on everything around. Far off, each head is still a distinct point of light',
     'Gunplay overhaul: recoil climbs over a few hundredths of a second and most of it settles back when you stop; each gun has its own climb, sideways kick, drift (the AK pulls right on a long burst), flip, sway, weight when aiming, flash and report, and no two shots sound or flash quite alike',
     'Bullet impacts by surface: concrete, stucco, stone, brick, asphalt, metal, wood, glass towers, dirt, grass, gravel, sand and water each have their own dust, chips, splinters, sand spray or splash, sparks only off metal (thrown along the ricochet), their own mark and sound; marks lie on the slope they hit, come from a reused pool and fade after a couple of minutes',
     'Hit reactions for everyone on foot, police included: flinches, staggers with real steps, lurches when running, a leg buckling, falls with the speed they had, and deaths that collapse, stagger or turn before going down (never thrown); each person has a balance that hits wear down; reactions blend in and out, and an officer\'s AI simply waits and carries on',
@@ -25875,8 +26132,9 @@ function shadowRates(){SHF.n++;const night=!!(todNow&&todNow.lamps>0),full=!nigh
    one that has a real spot light (with shadows) is left out so it doesn't light twice */
 const _lcol=new THREE.Color();
 function lampsTerm(){const W=window.BAY_LAMPW,C=window.BAY_LAMPC;if(!W)return;const T=todNow,k=T&&T.lamps>0?T.lamps:0;
-  // the last 8 slots: the light the police light bars throw (wanted.js fills BAY_EMERG), day or night
-  const E=window.BAY_EMERG||[],NE=8,NL=W.length-NE;for(let j=0;j<NE;j++){const e=E[j],q=W[NL+j];if(!e||!(e.w>0)){q.w=0;continue;}q.set(e.x,e.y,e.z,e.w);C[NL+j].set(e.r,e.g,e.b);}
+  // the police bars light the world through their own emitters now (emWorld); all 48 slots are street lamps
+  if(window.BAY_EMP&&!(performance.now()-(window.BAY_EMT||-1e9)<400))for(const q of window.BAY_EMP)q.w=0;
+  const NL=W.length;
   if(!k){for(let i=0;i<NL;i++)if(W[i].w)W[i].w=0;return;}
   const ord=lampOrder(),nl=LT.lamps.length;
   for(let i=0;i<NL;i++){const e=ord[i];if(!e||i<nl){W[i].w=0;continue;}const l=e[1];W[i].set(l.x,l.y,l.z,3*k*clamp(1.6-Math.sqrt(e[0])/150,0,1));_lcol.setHex(lampCol(l.x,l.z));C[i].set(_lcol.r,_lcol.g,_lcol.b);}}
@@ -26255,7 +26513,7 @@ window.SIG_STATE=(ni,ax)=>TR.sig(ni,ax);
 // the world script has already started; hook up input once its renderer exists
 const waitR=setInterval(()=>{if(typeof renderer!=='undefined'&&renderer&&renderer.domElement){clearInterval(waitR);bindInput();}},50);
 // test hooks (headless checks)
-window.BAYG={_pol:()=>({WANT,WCOPS,wStars,crime,wMe,wCrewOut,units:()=>TR.pd.units(),PLAYER,shoot,WPN,PEDS,FX,GUNS_DROP,surfOf,traceAll,pedStartShoot,pedFlee,WD,matAt,heightAt,WP,MOUSE,giveGun,wpEquip,SAVE}),scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
+window.BAYG={_pol:()=>({WANT,WCOPS,wStars,crime,wMe,wCrewOut,units:()=>TR.pd.units(),PLAYER,shoot,WPN,PEDS,FX,GUNS_DROP,surfOf,traceAll,pedStartShoot,pedFlee,WD,matAt,heightAt,WP,MOUSE,giveGun,wpEquip,SAVE,TR,emWorld,applyTOD:n=>applyTOD(n)}),scene:()=>scene,wSceneSlot,wGunpoint,personShot,wpSpread,pdBrain,gautoApply,GAUTO,GAM,gautoFrame,gautoSpec,gautoUser,WALLS_:WALLS,POSTS_:POSTS,gridAt,gpsNear,wPursuit,plWorld,insideBuilding,wAutoDrive,pdPlan,roadAt,TRAIL,hitV:hitVehicle,NET,NW,PARK,alarmStart,pauseOn,pauseOff,liveMode,netKeyF,pedRag,nwVehDentOut,nwPoseOut,nwGlass,nwPartsMask,RAGS,hitVehicleV:(v,dx,dz,m)=>hitVehicle(v,dx,dz,m),nwPack,nwTookPuppet,nwAdopt,nwPatrolsNear,netStart,netKeyF,netJack,netCarNear,netRideOn,netRideOff,acctCreate,acctLogin,DRIVE_:()=>DRIVE,Q_MEL,melAttach,UI,TSHOP,MEL,MELEE,melEquip,melSwing,ROB,robStart,dentVehicle,bodyUpset,hitVehicle,toolW,ATM_ALARMS,ME,PED,TR,CFG,startGame,toChars,toSpawn,toMenu,pick:i=>{pickI=i;},spots:()=>{makeSpots();return SPOTS;},setSpot:i=>{spotI=i;customSpot=null;},spawnAt:(x,z)=>{const s=snapSpawn(x,z);customSpot={name:'test',x:s.x,z:s.z,psi:s.psi};},
   groundAt,carY,mode:()=>MODE,spawnVehicle,hitVehicle:(dx,dz,m)=>hitVehicle(VEH,dx,dz,m),dmg:()=>DMG,enterCar,exitCar,phoneToggle,veh:()=>VEH,drive:()=>DRIVE,step:(n,dt)=>{for(let i=0;i<n;i++){clockT+=dt;step(dt);}},keys:KEYS,
 tryClimb,playStep,camera:()=>camera,SAVE,WP,SHOP,MOUSE,giveGun,wpEquip,wpFire,wpReload,traceAll,interact,shopOpen,atmOpen:()=>atmOpen(SHOP.atms[0]),uiClose,playerDie,respawnGo,FX,WPN,gunNoise,pedStartShoot,carBail,PLAYER_HP:()=>PLAYER.hp,shoot,fromTraffic,dbg:{fastRay,carList,carBoxT,carMeshes,traceCars,insideBuilding,wallPush,surfaceAt2,gridAt,WALLS,BLDG,shopL,inShop},pedNew,CARS:()=>CARS,fxCount:()=>({dec:FX.decals.length,cases:FX.caseL.length,bits:FX.bits.L.length,spr:FX.sprites.filter(e=>e.on).length}),render:()=>{try{gfxFrame(0.016,clockT);}catch(e){}renderFrame();},gfxApply,POST,REFL,LT,PHOTO,photoEnter,photoExit,photoStep,COVER,GPS,gpsOpen,gpsClose,gpsSet,gpsRoute,gpsNearest,WREF,LPOOL,LGLOW,shadowBudget,renderer:()=>renderer,police:()=>TR.police,peds:()=>PEDS,pedHit,playerPunch,PLAYER,dev:()=>({NPCS,buildNPC,npcPose,PEOPLE,apply,PZ}),rags:()=>RAGS,knockDown,carHitting,victims:()=>VICTIMS,vehKeys:()=>L.CIVIL.map(c=>c[0]),traffic:()=>TR.cars(),trafficDamageStep,applyPlay,applyGfx,cityAt,WANT,STAM,WCOPS,crime,wReport,wBusted,wClear,pdTake,wStars,wMe,wEyes,radioSay,SIREN,wSeatShot,wPlayerShot,wTase,wLights,TRPAR,parInit,THR,NATIVE,thrInit,wStealCruiser,wCruiserEnterable,TRAIL,pdTrail,PF,gpsRoute,gpsNearest,gpsGraph};
 })();
